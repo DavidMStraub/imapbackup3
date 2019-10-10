@@ -1,48 +1,8 @@
-#!/usr/bin/env python3 -u
+"""IMAP Incremental Backup Tool"""
 
-"""IMAP Incremental Backup Script"""
-__version__ = "1.4h"
-__author__ = "Rui Carmo (http://taoofmac.com)"
-__copyright__ = "(C) 2006-2018 Rui Carmo. Code under MIT License.(C)"
-__contributors__ = "jwagnerhki, Bob Ippolito, Michael Leonhard, Giuseppe Scrivano <gscrivano@gnu.org>, Ronan Sheth, Brandon Long, Christian Schanz, A. Bovett, Mark Feit"
+# Forked from https://github.com/rcarmo/imapbackup
+# Original code (C) 2006-2018 Rui Carmo. Code under MIT License.(C)
 
-# = Contributors =
-# http://github.com/markfeit: Allow password to be read from a file
-# http://github.com/jwagnerhki: fix for message_id checks
-# A. Bovett: Modifications for Thunderbird compatibility and disabling spinner in Windows
-#  Christian Schanz: added target directory parameter
-# Brandon Long (Gmail team): Reminder to use BODY.PEEK instead of BODY
-# Ronan Sheth: hashlib patch (this now requires Python 2.5, although reverting it back is trivial)
-# Giuseppe Scrivano: Added support for folders.
-# Michael Leonhard: LIST result parsing, SSL support, revamped argument processing,
-#                   moved spinner into class, extended recv fix to Windows
-# Bob Ippolito: fix for MemoryError on socket recv, http://python.org/sf/1092502
-# Rui Carmo: original author, up to v1.2e
-
-# = TODO =
-# - Add proper exception handlers to scanFile() and downloadMessages()
-# - Migrate mailbox usage from rfc822 module to email module
-# - Investigate using the noseek mailbox/email option to improve speed
-# - Use the email module to normalize downloaded messages
-#   and add missing Message-Id
-# - Test parseList() and its descendents on other imapds
-# - Test bzip2 support
-# - Add option to download only subscribed folders
-# - Add regex option to filter folders
-# - Use a single IMAP command to get Message-IDs
-# - Use a single IMAP command to fetch the messages
-# - Patch Python's ssl module to do proper checking of certificate chain
-# - Patch Python's ssl module to raise good exceptions
-# - Submit patch of socket._fileobject.read
-# - Improve imaplib module with LIST parsing code, submit patch
-# DONE:
-# v1.4h
-# - Add timeout option
-# v1.3c
-# - Add SSL support
-# - Support host:port
-# - Cleaned up code using PyLint to identify problems
-#   pylint -f html --indent-string="  " --max-line-length=90 imapbackup.py > report.html
 
 import gc
 import getopt
@@ -282,8 +242,6 @@ class MailServerHandler:
         for encoding in ["utf-8", "latin1"]:
             try:
                 text = data[0][1].decode(encoding).strip().replace("\r", "")
-            except KeyboardInterrupt:
-                sys.exit(1)
             except:
                 text = None
         if text is None:
@@ -786,19 +744,8 @@ def main():
         sys.exit(5)
 
 
-# From http://www.pixelbeat.org/talks/python/spinner.py
-def cli_exception(typ, value, traceback):
-    """Handle CTRL-C by printing newline instead of ugly stack trace"""
-    if not issubclass(typ, KeyboardInterrupt):
-        sys.__excepthook__(typ, value, traceback)
-    else:
-        sys.stdout.write("\n")
-        sys.stdout.flush()
-
-
-if sys.stdin.isatty():
-    sys.excepthook = cli_exception
-
-
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        pass
