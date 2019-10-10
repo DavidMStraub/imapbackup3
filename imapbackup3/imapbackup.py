@@ -16,6 +16,9 @@ import time
 import logging
 
 
+logger = logging.getLogger('imapbackup3')
+
+
 class SkipFolderException(Exception):
     """Indicates aborting processing of current folder, continue with next folder."""
 
@@ -23,7 +26,7 @@ class SkipFolderException(Exception):
 
 
 class Spinner:
-    """logging.infos out message with cute spinner, indicating progress"""
+    """logger.infos out message with cute spinner, indicating progress"""
 
     def __init__(self, message, nospinner):
         """Spinner constructor"""
@@ -95,12 +98,12 @@ class MailBoxHandler:
 
         if self.overwrite:
             if os.path.exists(self.path):
-                logging.info("Deleting", self.path)
+                logger.info("Deleting %", self.path)
                 os.remove(self.path)
             return []
 
         if not messages:
-            logging.info("New messages: 0")
+            logger.info("New messages: 0")
             return
 
         self.open_mbox()
@@ -118,10 +121,10 @@ class MailBoxHandler:
             )
         self.close_mbox()
         spinner.stop()
-        logging.info(
-            ": {} total, {} for largest message".format(
-                pretty_byte_count(total), pretty_byte_count(biggest)
-            )
+        logger.info(
+            ": %s total, %s for largest message",
+            pretty_byte_count(total),
+            pretty_byte_count(biggest)
         )
 
     def download_message(self, mbox, msg_id, num, spinner, total, biggest):
@@ -149,10 +152,10 @@ class MailBoxHandler:
         spinner.spin()
 
         spinner.stop()
-        logging.info(
-            ": {} total, {} for largest message".format(
-                pretty_byte_count(total), pretty_byte_count(biggest)
-            )
+        logger.info(
+            ": %s total, %s for largest message",
+            pretty_byte_count(total),
+            pretty_byte_count(biggest)
         )
 
         return total, biggest
@@ -176,7 +179,7 @@ class MailBoxHandler:
             # We assume all messages on disk have message-ids
             msg_id = message["message-id"]
             if not msg_id:
-                logging.info(
+                logger.info(
                     "\nWARNING: Message #{} in {}".format(i, self.path)
                     + "has no Message-Id header."
                 )
@@ -188,7 +191,7 @@ class MailBoxHandler:
         # done
         self.close_mbox()
         spinner.stop()
-        logging.info(": %d messages" % (len(list(messages.keys()))))
+        logger.info(": %d messages", (len(list(messages.keys()))))
         return messages
 
 
@@ -234,49 +237,56 @@ class MailServerHandler:
             if self.timeout:
                 socket.setdefaulttimeout(self.timeout)
             if self.usessl and self.keyfilename:
-                logging.info(
-                    "Connecting to '%s' TCP port %d," % (self.host, self.port)
-                    + "SSL, key from %s," % (self.keyfilename)
-                    + " cert from %s " % (self.certfilename)
+                logger.info(
+                    "Connecting to '%s' TCP port %d, SSL, key from %s, cert from %s",
+                    self.host,
+                    self.port,
+                    self.keyfilename,
+                    self.certfilename
                 )
                 server = imaplib.IMAP4_SSL(
                     self.host, self.port, self.keyfilename, self.certfilename
                 )
             elif self.usessl:
-                logging.info(
+                logger.info(
                     "Connecting to '%s' TCP port %d, SSL" % (self.host, self.port)
                 )
                 server = imaplib.IMAP4_SSL(self.host, self.port)
             else:
-                logging.info("Connecting to '%s' TCP port %d" % (self.host, self.port))
+                logger.info("Connecting to '%s' TCP port %d", self.host, self.port)
                 server = imaplib.IMAP4(self.host, self.port)
 
             # speed up interactions on TCP connections using small packets
             server.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
 
-            logging.info("Logging in as '%s'" % (self.user))
+            logger.info("Logging in as '%s'", (self.user))
             server.login(self.user, self.password)
         except socket.gaierror as err:
             (err, desc) = err
-            logging.info(
-                "ERROR: problem looking up server '%s' (%s %s)" % (self.host, err, desc)
+            logger.info(
+                "ERROR: problem looking up server '%s' (%s %s)",
+                self.host,
+                err,
+                desc
             )
             sys.exit(3)
         except socket.error as err:
             if str(err) == "SSL_CTX_use_PrivateKey_file error":
-                logging.info(
+                logger.info(
                     "ERROR: error reading private key file '{}'".format(
                         self.keyfilename
                     )
                 )
             elif str(err) == "SSL_CTX_use_certificate_chain_file error":
-                logging.info(
-                    "ERROR: error reading certificate chain file '%s'"
-                    % (self.keyfilename)
+                logger.info(
+                    "ERROR: error reading certificate chain file '%s'",
+                    (self.keyfilename)
                 )
             else:
-                logging.info(
-                    "ERROR: could not connect to '{}' ({})".format(self.host, err)
+                logger.info(
+                    "ERROR: could not connect to '%' (%)",
+                    self.host,
+                    err
                 )
 
             sys.exit(4)
@@ -334,10 +344,10 @@ class MailServerHandler:
                 spinner.spin()
         finally:
             spinner.stop()
-            logging.info(":")
+            logger.info(":")
 
         # done
-        logging.info("{} messages".format(len(list(messages.keys()))))
+        logger.info("%d messages", len(list(messages)))
         return messages
 
     def get_hierarchy_delimiter(self):
@@ -381,13 +391,13 @@ class MailServerHandler:
                     filename = filename.replace("INBOX", "Inbox")
             else:
                 filename = ".".join(foldername.split(delim)) + ".mbox" + suffix
-            # logging.info "\n*** Folder:", foldername # *DEBUG
-            # logging.info "***   File:", filename # *DEBUG
+            # logger.info "\n*** Folder:", foldername # *DEBUG
+            # logger.info "***   File:", filename # *DEBUG
             names.append((foldername, filename))
 
         # done
         spinner.stop()
-        logging.info(": %s folders" % (len(names)))
+        logger.info(": %s folders", len(names))
         return names
 
 
@@ -414,7 +424,7 @@ def parse_paren_list(row):
             assert match != None
             name_attrib = row[match.start() : match.end()]
             row = row[match.end() :]
-            # logging.info "MATCHED '%s' '%s'" % (name_attrib, row)
+            # logger.info "MATCHED '%s' '%s'" % (name_attrib, row)
             name_attrib = name_attrib.strip()
             result.append(name_attrib)
 
