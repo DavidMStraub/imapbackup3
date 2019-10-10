@@ -44,7 +44,6 @@ __contributors__ = "jwagnerhki, Bob Ippolito, Michael Leonhard, Giuseppe Scrivan
 # - Cleaned up code using PyLint to identify problems
 #   pylint -f html --indent-string="  " --max-line-length=90 imapbackup.py > report.html
 
-import bz2
 import gc
 import getopt
 import getpass
@@ -137,37 +136,57 @@ def string_from_file(value):
         return content.read().strip()
 
 
-def download_messages(server, filename, messages, config):
-    """Download messages from folder and append to mailbox"""
+class MailBoxHandler:
+    def __init__(self, path, mailserver, folder, overwrite=False):
+        self.mailserver = mailserver
+        self.path = path
+        self.overwrite = overwrite
+        self.folder = folder
+        self.mbox = None
 
-    if config["overwrite"]:
-        if os.path.exists(filename):
-            print("Deleting", filename)
-            os.remove(filename)
-        return []
+    def open_mbox(self):
+        self.mbox = open(self.path, "ab")
+        return self.mbox
 
-    # disable compression
-    assert not config["compress"]
+    def close_mbox(self):
+        if self.mbox is not None:
+            self.mbox.close()
 
-    mbox = open(filename, "ab")
+    def download_messages(self, messages):
+        """Download messages from folder and append to mailbox"""
 
-    # the folder has already been selected by scanFolder()
+        if self.overwrite:
+            if os.path.exists(self.path):
+                print("Deleting", self.path)
+                os.remove(self.path)
+            return []
 
-    # nothing to do
-    if not messages:
-        print("New messages: 0")
-        mbox.close()
-        return
+        if not messages:
+            print("New messages: 0")
+            return
 
-    spinner = Spinner(
-        "Downloading %s new messages to %s" % (len(messages), filename),
-        config["nospinner"],
-    )
-    total = biggest = 0
+        self.open_mbox()
 
-    # each new message
-    for msg_id in messages:
+        spinner = Spinner(
+            "Downloading %s new messages to %s" % (len(messages), self.path), False
+        )
 
+        total = biggest = 0
+
+        # each new message
+        for msg_id in messages:
+            total, biggest = self.download_message(
+                self.mbox, msg_id, messages[msg_id], spinner, total, biggest
+            )
+        self.close_mbox()
+        spinner.stop()
+        print(
+            ": {} total, {} for largest message".format(
+                pretty_byte_count(total), pretty_byte_count(biggest)
+            )
+        )
+
+    def download_message(self, mbox, msg_id, num, spinner, total, biggest):
         # This "From" and the terminating newline below delimit messages
         # in mbox files.  Note that RFC 4155 specifies that the date be
         # in the same format as the output of ctime(3), which is required
@@ -177,136 +196,258 @@ def download_messages(server, filename, messages, config):
         # the other headers
         if UUID in msg_id:
             buf = buf + "Message-Id: {}\n".format(msg_id)
-        mbox.write(buf)
+        self.mbox.write(buf.encode())
 
         # fetch message
-        typ, data = server.fetch(messages[msg_id], "RFC822")
-        assert typ == "OK"
-        text = data[0][1].strip().replace("\r", "")
-        if config["thunderbird"]:
-            # This avoids Thunderbird mistaking a line starting "From  " as the start
-            # of a new message. _Might_ also apply to other mail lients - unknown
-            text = text.replace("\nFrom ", "\n From ")
-        mbox.write(text)
-        mbox.write("\n\n")
+        text = self.mailserver.fetch_message(self.folder, num)
+        self.mbox.write(text.encode())
+        self.mbox.write(b"\n\n")
 
         size = len(text)
         biggest = max(size, biggest)
         total += size
 
-        del data
         gc.collect()
         spinner.spin()
 
-    mbox.close()
-    spinner.stop()
-    print(
-        ": {} total, {} for largest message"
-        .format(pretty_byte_count(total), pretty_byte_count(biggest))
-    )
+        spinner.stop()
+        print(
+            ": {} total, {} for largest message".format(
+                pretty_byte_count(total), pretty_byte_count(biggest)
+            )
+        )
 
+        return total, biggest
 
-def scan_file(filename, compress, overwrite, nospinner):
-    """Gets IDs of messages in the specified mbox file"""
-    # file will be overwritten
-    if overwrite:
-        return []
+    def scan_file(self):
+        """Gets IDs of messages in the specified mbox file"""
+        # file will be overwritten
+        nospinner = False
+        if self.overwrite:
+            return []
 
-    if compress:
-        raise NotImplementedError("Cannot work with compressed files")
+        spinner = Spinner("File %s" % (self.path), nospinner)
 
-    # file doesn't exist
-    if not os.path.exists(filename):
-        print("File %s: not found" % (filename))
-        return []
+        self.open_mbox()
 
-    spinner = Spinner("File %s" % (filename), nospinner)
-
-    mbox = open(filename, "rb")
-
-    messages = {}
-
-    # each message
-    i = 0
-    for message in mailbox.mbox(filename):
-        header = ""
-        # We assume all messages on disk have message-ids
-        try:
-            header = "".join(message.getfirstmatchingheader("message-id"))
-        except KeyError:
-            # No message ID was found. Warn the user and move on
-            print()
-            print("WARNING: Message #{} in {}".format(i, filename), end=" ")
-            print("has no Message-Id header.")
-
-        header = BLANKS_RE.sub(" ", header.strip())
-        try:
-            msg_id = MSGID_RE.match(header).group(1)
-            if msg_id not in list(messages.keys()):
-                # avoid adding dupes
-                messages[msg_id] = msg_id
-        except AttributeError:
-            # Message-Id was found but could somehow not be parsed by regexp
-            # (highly bloody unlikely)
-            print()
-            print("WARNING: Message #{} in {}".format(i, filename), end=" ")
-            print("has a malformed Message-Id header.")
-        spinner.spin()
-        i = i + 1
-
-    # done
-    mbox.close()
-    spinner.stop()
-    print(": %d messages" % (len(list(messages.keys()))))
-    return messages
-
-
-def scan_folder(server, foldername, nospinner):
-    """Gets IDs of messages in the specified folder, returns id:num dict"""
-    messages = {}
-    spinner = Spinner("Folder {}".format(foldername), nospinner)
-    try:
-        typ, data = server.select(foldername, readonly=True)
-        if typ != "OK":
-            raise SkipFolderException("SELECT failed: %s" % (data))
-        num_msgs = int(data[0])
+        messages = {}
 
         # each message
-        for num in range(1, num_msgs + 1):
-            # Retrieve Message-Id, making sure we don't mark all messages as read
-            typ, data = server.fetch(num, "(BODY.PEEK[HEADER.FIELDS (MESSAGE-ID)])")
-            if typ != "OK":
-                raise SkipFolderException("FETCH %s failed: %s" % (num, data))
+        i = 0
+        for message in mailbox.mbox(self.path):
+            # We assume all messages on disk have message-ids
+            msg_id = message["message-id"]
+            if not msg_id:
+                print()
+                print("WARNING: Message #{} in {}".format(i, self.path), end=" ")
+                print("has no Message-Id header.")
+                continue
+            messages[msg_id] = msg_id
+            spinner.spin()
+            i = i + 1
 
-            header = data[0][1].strip()
-            # remove newlines inside Message-Id (a dumb Exchange trait)
-            header = BLANKS_RE.sub(" ", header)
+        # done
+        self.close_mbox()
+        spinner.stop()
+        print(": %d messages" % (len(list(messages.keys()))))
+        return messages
+
+
+class MailServerHandler:
+    def __init__(
+        self,
+        host,
+        user,
+        password,
+        port=993,
+        usessl=True,
+        keyfilename=None,
+        certfilename=None,
+        timeout=None,
+    ):
+        self.host = host
+        self.user = user
+        self.password = password
+        self.port = port
+        self.usessl = usessl
+        self.keyfilename = keyfilename
+        self.certfilename = certfilename
+        self.timeout = timeout
+        self.server = None
+
+    def fetch_message(self, folder, num):
+        self.server.select(folder, readonly=True)
+        typ, data = self.server.fetch(str(num), "RFC822")
+        assert typ == "OK"
+        for encoding in ["utf-8", "latin1"]:
             try:
-                msg_id = MSGID_RE.match(header).group(1)
-                if msg_id not in list(messages.keys()):
-                    # avoid adding dupes
-                    messages[msg_id] = num
-            except (IndexError, AttributeError):
-                # Some messages may have no Message-Id, so we'll synthesise one
-                # (this usually happens with Sent, Drafts and .Mac news)
-                typ, data = server.fetch(
-                    num, "(BODY[HEADER.FIELDS (FROM TO CC DATE SUBJECT)])"
+                text = data[0][1].decode(encoding).strip().replace("\r", "")
+            except KeyboardInterrupt:
+                sys.exit(1)
+            except:
+                text = None
+        if text is None:
+            raise ValueError(data[0][1])
+        del data
+        return text
+
+    def connect_and_login(self):
+        """Connects to the server and logs in.  Returns IMAP4 object."""
+        try:
+            if self.timeout:
+                socket.setdefaulttimeout(self.timeout)
+            if self.usessl and self.keyfilename:
+                print(
+                    "Connecting to '%s' TCP port %d," % (self.host, self.port), end=" "
+                )
+                print("SSL, key from %s," % (self.keyfilename), end=" ")
+                print("cert from %s " % (self.certfilename))
+                server = imaplib.IMAP4_SSL(
+                    self.host, self.port, self.keyfilename, self.certfilename
+                )
+            elif self.usessl:
+                print("Connecting to '%s' TCP port %d, SSL" % (self.host, self.port))
+                server = imaplib.IMAP4_SSL(self.host, self.port)
+            else:
+                print("Connecting to '%s' TCP port %d" % (self.host, self.port))
+                server = imaplib.IMAP4(self.host, self.port)
+
+            # speed up interactions on TCP connections using small packets
+            server.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+
+            print("Logging in as '%s'" % (self.user))
+            server.login(self.user, self.password)
+        except socket.gaierror as err:
+            (err, desc) = err
+            print(
+                "ERROR: problem looking up server '%s' (%s %s)" % (self.host, err, desc)
+            )
+            sys.exit(3)
+        except socket.error as err:
+            if str(err) == "SSL_CTX_use_PrivateKey_file error":
+                print(
+                    "ERROR: error reading private key file '{}'".format(
+                        self.keyfilename
+                    )
+                )
+            elif str(err) == "SSL_CTX_use_certificate_chain_file error":
+                print(
+                    "ERROR: error reading certificate chain file '%s'"
+                    % (self.keyfilename)
+                )
+            else:
+                print("ERROR: could not connect to '{}' ({})".format(self.host, err))
+
+            sys.exit(4)
+
+        self.server = server
+        return server
+
+    def scan_folder(self, foldername):
+        """Gets IDs of messages in the specified folder, returns id:num dict"""
+        nospinner = False
+        messages = {}
+        spinner = Spinner("Folder {}".format(foldername), nospinner)
+        try:
+            typ, data = self.server.select(foldername, readonly=True)
+            if typ != "OK":
+                raise SkipFolderException("SELECT failed: %s" % (data))
+            num_msgs = int(data[0])
+
+            # each message
+            for num in range(1, num_msgs + 1):
+                # Retrieve Message-Id, making sure we don't mark all messages as read
+                typ, data = self.server.fetch(
+                    str(num), "(BODY.PEEK[HEADER.FIELDS (MESSAGE-ID)])"
                 )
                 if typ != "OK":
                     raise SkipFolderException("FETCH {} failed: {}".format(num, data))
-                header = data[0][1].strip()
-                header = header.replace("\r\n", "\t")
-                messages[
-                    "<" + UUID + "." + hashlib.sha1(header).hexdigest() + ">"
-                ] = num
-            spinner.spin()
-    finally:
-        spinner.stop()
-        print(":", end=" ")
 
-    # done
-    print("{} messages".format(len(list(messages.keys()))))
-    return messages
+                header = data[0][1].strip()
+                # remove newlines inside Message-Id (a dumb Exchange trait)
+                header = BLANKS_RE.sub(" ", header.decode())
+                try:
+                    msg_id = MSGID_RE.match(header).group(1)
+                    if msg_id not in list(messages.keys()):
+                        # avoid adding dupes
+                        messages[msg_id] = num
+                except (IndexError, AttributeError):
+                    # Some messages may have no Message-Id, so we'll synthesise one
+                    # (this usually happens with Sent, Drafts and .Mac news)
+                    typ, data = self.server.fetch(
+                        str(num), "(BODY[HEADER.FIELDS (FROM TO CC DATE SUBJECT)])"
+                    )
+                    if typ != "OK":
+                        raise SkipFolderException(
+                            "FETCH {} failed: {}".format(num, data)
+                        )
+                    header = data[0][1].decode().strip()
+                    header = header.replace("\r\n", "\t")
+                    messages[
+                        "<"
+                        + UUID
+                        + "."
+                        + hashlib.sha1(header.encode()).hexdigest()
+                        + ">"
+                    ] = num
+                spinner.spin()
+        finally:
+            spinner.stop()
+            print(":", end=" ")
+
+        # done
+        print("{} messages".format(len(list(messages.keys()))))
+        return messages
+
+    def get_hierarchy_delimiter(self):
+        """Queries the imapd for the hierarchy delimiter, eg. '.' in INBOX.Sent"""
+        # see RFC 3501 page 39 paragraph 4
+        typ, data = self.server.list()
+        assert typ == "OK"
+        # assert len(data) == 1
+        lst = parse_list(data[0])  # [attribs, hierarchy delimiter, root name]
+        hierarchy_delim = lst[1]
+        # NIL if there is no hierarchy
+        if hierarchy_delim == "NIL":
+            hierarchy_delim = "."
+        return hierarchy_delim
+
+    def get_names(self, thunderbird=False, compress="none"):
+        """Get list of folders, returns [(FolderName,FileName)]"""
+        nospinner = False
+
+        spinner = Spinner("Finding Folders", nospinner)
+
+        # Get hierarchy delimiter
+        delim = self.get_hierarchy_delimiter()
+        spinner.spin()
+
+        # Get LIST of all folders
+        typ, data = self.server.list()
+        assert typ == "OK"
+        spinner.spin()
+
+        names = []
+
+        # parse each LIST, find folder name
+        for row in data:
+            lst = parse_list(row)
+            foldername = lst[2]
+            suffix = {"none": "", "gzip": ".gz", "bzip2": ".bz2"}[compress]
+            if thunderbird:
+                filename = ".sbd/".join(foldername.split(delim)) + suffix
+                if filename.startswith("INBOX"):
+                    filename = filename.replace("INBOX", "Inbox")
+            else:
+                filename = ".".join(foldername.split(delim)) + ".mbox" + suffix
+            # print "\n*** Folder:", foldername # *DEBUG
+            # print "***   File:", filename # *DEBUG
+            names.append((foldername, filename))
+
+        # done
+        spinner.stop()
+        print(": %s folders" % (len(names)))
+        return names
 
 
 def parse_paren_list(row):
@@ -352,62 +493,11 @@ def parse_string_list(row):
 
 def parse_list(row):
     """Prases response of LIST command into a list"""
-    row = row.strip()
+    row = row.strip().decode()
     paren_list, row = parse_paren_list(row)
     string_list = parse_string_list(row)
     assert len(string_list) == 2
     return [paren_list] + string_list
-
-
-def get_hierarchy_delimiter(server):
-    """Queries the imapd for the hierarchy delimiter, eg. '.' in INBOX.Sent"""
-    # see RFC 3501 page 39 paragraph 4
-    typ, data = server.list("", "")
-    assert typ == "OK"
-    assert len(data) == 1
-    lst = parse_list(data[0])  # [attribs, hierarchy delimiter, root name]
-    hierarchy_delim = lst[1]
-    # NIL if there is no hierarchy
-    if hierarchy_delim == "NIL":
-        hierarchy_delim = "."
-    return hierarchy_delim
-
-
-def get_names(server, compress, thunderbird, nospinner):
-    """Get list of folders, returns [(FolderName,FileName)]"""
-
-    spinner = Spinner("Finding Folders", nospinner)
-
-    # Get hierarchy delimiter
-    delim = get_hierarchy_delimiter(server)
-    spinner.spin()
-
-    # Get LIST of all folders
-    typ, data = server.list()
-    assert typ == "OK"
-    spinner.spin()
-
-    names = []
-
-    # parse each LIST, find folder name
-    for row in data:
-        lst = parse_list(row)
-        foldername = lst[2]
-        suffix = {"none": "", "gzip": ".gz", "bzip2": ".bz2"}[compress]
-        if thunderbird:
-            filename = ".sbd/".join(foldername.split(delim)) + suffix
-            if filename.startswith("INBOX"):
-                filename = filename.replace("INBOX", "Inbox")
-        else:
-            filename = ".".join(foldername.split(delim)) + ".mbox" + suffix
-        # print "\n*** Folder:", foldername # *DEBUG
-        # print "***   File:", filename # *DEBUG
-        names.append((foldername, filename))
-
-    # done
-    spinner.stop()
-    print(": %s folders" % (len(names)))
-    return names
 
 
 def print_usage():
@@ -552,9 +642,7 @@ def check_config(config, warnings, errors):
     """Checks the config for consistency, returns (config, warnings, errors)"""
 
     if config["compress"] != "none":
-        errors.append(
-            "Compression not supported."
-        )
+        errors.append("Compression not supported.")
     if "server" not in config:
         errors.append("No server specified.")
     if "user" not in config:
@@ -635,66 +723,6 @@ def get_config():
     return config
 
 
-def connect_and_login(config):
-    """Connects to the server and logs in.  Returns IMAP4 object."""
-    try:
-        assert not ("keyfilename" in config) ^ ("certfilename" in config)
-        if config["timeout"]:
-            socket.setdefaulttimeout(config["timeout"])
-
-        if config["usessl"] and "keyfilename" in config:
-            print(
-                "Connecting to '%s' TCP port %d," % (config["server"], config["port"]),
-                end=" ",
-            )
-            print("SSL, key from %s," % (config["keyfilename"]), end=" ")
-            print("cert from %s " % (config["certfilename"]))
-            server = imaplib.IMAP4_SSL(
-                config["server"],
-                config["port"],
-                config["keyfilename"],
-                config["certfilename"],
-            )
-        elif config["usessl"]:
-            print(
-                "Connecting to '%s' TCP port %d, SSL"
-                % (config["server"], config["port"])
-            )
-            server = imaplib.IMAP4_SSL(config["server"], config["port"])
-        else:
-            print("Connecting to '%s' TCP port %d" % (config["server"], config["port"]))
-            server = imaplib.IMAP4(config["server"], config["port"])
-
-        # speed up interactions on TCP connections using small packets
-        server.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-
-        print("Logging in as '%s'" % (config["user"]))
-        server.login(config["user"], config["pass"])
-    except socket.gaierror as err:
-        (err, desc) = err
-        print(
-            "ERROR: problem looking up server '%s' (%s %s)"
-            % (config["server"], err, desc)
-        )
-        sys.exit(3)
-    except socket.error as err:
-        if str(err) == "SSL_CTX_use_PrivateKey_file error":
-            print(
-                "ERROR: error reading private key file '{}'".format(config["keyfilename"])
-            )
-        elif str(err) == "SSL_CTX_use_certificate_chain_file error":
-            print(
-                "ERROR: error reading certificate chain file '%s'"
-                % (config["keyfilename"])
-            )
-        else:
-            print("ERROR: could not connect to '{}' ({})".format(config["server"], err))
-
-        sys.exit(4)
-
-    return server
-
-
 def create_folder_structure(names):
     """ Create the folder structure on disk """
     for imap_foldername, filename in sorted(names):
@@ -712,10 +740,15 @@ def main():
     """Main entry point"""
     try:
         config = get_config()
-        server = connect_and_login(config)
-        names = get_names(
-            server, config["compress"], config["thunderbird"], config["nospinner"]
+        server = MailServerHandler(
+            host=config["server"],
+            user=config["user"],
+            password=config["pass"],
+            port=config["port"],
+            usessl=config["usessl"],
         )
+        server.connect_and_login()
+        names = server.get_names()
         if config.get("folders"):
             dirs = [x.strip() for x in config.get("folders").split(",")]
             if config["thunderbird"]:
@@ -725,21 +758,14 @@ def main():
                 ]
             names = [x for x in names if x[0] in dirs]
 
-        # for n, name in enumerate(names): # *DEBUG
-        #   print n, name # *DEBUG
-
         create_folder_structure(names)
 
         for name_pair in names:
             try:
                 foldername, filename = name_pair
-                fol_messages = scan_folder(server, foldername, config["nospinner"])
-                fil_messages = scan_file(
-                    filename,
-                    config["compress"],
-                    config["overwrite"],
-                    config["nospinner"],
-                )
+                fol_messages = server.scan_folder(foldername)
+                box = MailBoxHandler(filename, server, foldername)
+                fil_messages = box.scan_file()
                 new_messages = {}
                 for msg_id in list(fol_messages.keys()):
                     if msg_id not in fil_messages:
@@ -748,13 +774,13 @@ def main():
                 # for f in new_messages:
                 #  print "%s : %s" % (f, new_messages[f])
 
-                download_messages(server, filename, new_messages, config)
+                box.download_messages(new_messages)
 
             except SkipFolderException as err:
                 print(err)
 
         print("Disconnecting")
-        server.logout()
+        server.server.logout()
     except (socket.error, imaplib.IMAP4.error) as err:
         print("ERROR:", err)
         sys.exit(5)
