@@ -112,7 +112,7 @@ def string_from_file(value):
     the '@' with a '\' to treat it as a literal.
     """
 
-    assert isinstance(value, basestring)
+    assert isinstance(value, str)
 
     if not value or value[0] not in ["\\", "@"]:
         return value
@@ -131,7 +131,7 @@ def download_messages(server, filename, messages, config):
  
   if config['overwrite']:
     if os.path.exists(filename):
-      print "Deleting", filename
+      print("Deleting", filename)
       os.remove(filename)
     return []
   else:
@@ -149,7 +149,7 @@ def download_messages(server, filename, messages, config):
  
   # nothing to do
   if not len(messages):
-    print "New messages: 0"
+    print("New messages: 0")
     mbox.close()
     return
 
@@ -158,7 +158,7 @@ def download_messages(server, filename, messages, config):
   total = biggest = 0
  
   # each new message
-  for msg_id in messages.keys():
+  for msg_id in list(messages.keys()):
 
     # This "From" and the terminating newline below delimit messages
     # in mbox files.  Note that RFC 4155 specifies that the date be
@@ -192,8 +192,8 @@ def download_messages(server, filename, messages, config):
  
   mbox.close()
   spinner.stop()
-  print ": %s total, %s for largest message" % (pretty_byte_count(total),
-                                                pretty_byte_count(biggest))
+  print(": %s total, %s for largest message" % (pretty_byte_count(total),
+                                                pretty_byte_count(biggest)))
  
 def scan_file(filename, compress, overwrite, nospinner):
   """Gets IDs of messages in the specified mbox file"""
@@ -205,7 +205,7 @@ def scan_file(filename, compress, overwrite, nospinner):
  
   # file doesn't exist
   if not os.path.exists(filename):
-    print "File %s: not found" % (filename)
+    print("File %s: not found" % (filename))
     return []
  
   spinner = Spinner("File %s" % (filename), nospinner)
@@ -229,29 +229,29 @@ def scan_file(filename, compress, overwrite, nospinner):
       header =  ''.join(message.getfirstmatchingheader('message-id'))
     except KeyError:
       # No message ID was found. Warn the user and move on
-      print
-      print "WARNING: Message #%d in %s" % (i, filename),
-      print "has no Message-Id header."
+      print()
+      print("WARNING: Message #%d in %s" % (i, filename), end=' ')
+      print("has no Message-Id header.")
  
     header = BLANKS_RE.sub(' ', header.strip())
     try:
       msg_id = MSGID_RE.match(header).group(1)
-      if msg_id not in messages.keys():
+      if msg_id not in list(messages.keys()):
         # avoid adding dupes
         messages[msg_id] = msg_id
     except AttributeError:
       # Message-Id was found but could somehow not be parsed by regexp
       # (highly bloody unlikely)
-      print
-      print "WARNING: Message #%d in %s" % (i, filename),
-      print "has a malformed Message-Id header."
+      print()
+      print("WARNING: Message #%d in %s" % (i, filename), end=' ')
+      print("has a malformed Message-Id header.")
     spinner.spin()
     i = i + 1
  
   # done
   mbox.close()
   spinner.stop()
-  print ": %d messages" % (len(messages.keys()))
+  print(": %d messages" % (len(list(messages.keys()))))
   return messages
  
 def scan_folder(server, foldername, nospinner):
@@ -276,7 +276,7 @@ def scan_folder(server, foldername, nospinner):
       header = BLANKS_RE.sub(' ', header)
       try:
         msg_id = MSGID_RE.match(header).group(1) 
-        if msg_id not in messages.keys():
+        if msg_id not in list(messages.keys()):
           # avoid adding dupes
           messages[msg_id] = num
       except (IndexError, AttributeError):
@@ -291,10 +291,10 @@ def scan_folder(server, foldername, nospinner):
       spinner.spin()
   finally:
     spinner.stop()
-    print ":",
+    print(":", end=' ')
  
   # done
-  print "%d messages" % (len(messages.keys()))
+  print("%d messages" % (len(list(messages.keys()))))
   return messages
  
 def parse_paren_list(row):
@@ -390,32 +390,32 @@ def get_names(server, compress, thunderbird, nospinner):
  
   # done
   spinner.stop()
-  print ": %s folders" % (len(names))
+  print(": %s folders" % (len(names)))
   return names
  
 def print_usage():
   """Prints usage, exits"""
   #     "                                                                               "
-  print "Usage: imapbackup [OPTIONS] -s HOST -u USERNAME [-p PASSWORD]"
-  print " -a --append-to-mboxes     Append new messages to mbox files. (default)"
-  print " -y --yes-overwrite-mboxes Overwite existing mbox files instead of appending."
-  print " -n --compress=none        Use one plain mbox file for each folder. (default)"
-  print " -z --compress=gzip        Use mbox.gz files.  Appending may be very slow."
-  print " -b --compress=bzip2       Use mbox.bz2 files. Appending not supported: use -y."
-  print " -f --=folder              Specifify which folders use.  Comma separated list."
-  print " -e --ssl                  Use SSL.  Port defaults to 993."
-  print " -k KEY --key=KEY          PEM private key file for SSL.  Specify cert, too."
-  print " -c CERT --cert=CERT       PEM certificate chain for SSL.  Specify key, too."
-  print "                           Python's SSL module doesn't check the cert chain."
-  print " -s HOST --server=HOST     Address of server, port optional, eg. mail.com:143"
-  print " -u USER --user=USER       Username to log into server"
-  print " -p PASS --pass=PASS       Prompts for password if not specified.  If the first"
-  print "                           character is '@', treat the rest as a path to a file"
-  print "                           containing the password.  Leading '\' makes it literal."
-  print " -t SECS --timeout=SECS    Sets socket timeout to SECS seconds."
-  print " --thunderbird             Create Mozilla Thunderbird compatible mailbox"
-  print " --nospinner               Disable spinner (makes output log-friendly)"
-  print "\nNOTE: mbox files are created in the current working directory."
+  print("Usage: imapbackup [OPTIONS] -s HOST -u USERNAME [-p PASSWORD]")
+  print(" -a --append-to-mboxes     Append new messages to mbox files. (default)")
+  print(" -y --yes-overwrite-mboxes Overwite existing mbox files instead of appending.")
+  print(" -n --compress=none        Use one plain mbox file for each folder. (default)")
+  print(" -z --compress=gzip        Use mbox.gz files.  Appending may be very slow.")
+  print(" -b --compress=bzip2       Use mbox.bz2 files. Appending not supported: use -y.")
+  print(" -f --=folder              Specifify which folders use.  Comma separated list.")
+  print(" -e --ssl                  Use SSL.  Port defaults to 993.")
+  print(" -k KEY --key=KEY          PEM private key file for SSL.  Specify cert, too.")
+  print(" -c CERT --cert=CERT       PEM certificate chain for SSL.  Specify key, too.")
+  print("                           Python's SSL module doesn't check the cert chain.")
+  print(" -s HOST --server=HOST     Address of server, port optional, eg. mail.com:143")
+  print(" -u USER --user=USER       Username to log into server")
+  print(" -p PASS --pass=PASS       Prompts for password if not specified.  If the first")
+  print("                           character is '@', treat the rest as a path to a file")
+  print("                           containing the password.  Leading '\' makes it literal.")
+  print(" -t SECS --timeout=SECS    Sets socket timeout to SECS seconds.")
+  print(" --thunderbird             Create Mozilla Thunderbird compatible mailbox")
+  print(" --nospinner               Disable spinner (makes output log-friendly)")
+  print("\nNOTE: mbox files are created in the current working directory.")
   sys.exit(2)
  
 def process_cline():
@@ -551,11 +551,11 @@ def get_config():
  
   # show warnings
   for warning in warnings:
-    print "WARNING:", warning
+    print("WARNING:", warning)
  
   # show errors, exit
   for error in errors:
-    print "ERROR", error
+    print("ERROR", error)
   if len(errors):
     sys.exit(2)
  
@@ -583,34 +583,34 @@ def connect_and_login(config):
       socket.setdefaulttimeout(config['timeout'])
 
     if config['usessl'] and 'keyfilename' in config:
-      print "Connecting to '%s' TCP port %d," % (config['server'], config['port']),
-      print "SSL, key from %s," % (config['keyfilename']),
-      print "cert from %s " % (config['certfilename'])
+      print("Connecting to '%s' TCP port %d," % (config['server'], config['port']), end=' ')
+      print("SSL, key from %s," % (config['keyfilename']), end=' ')
+      print("cert from %s " % (config['certfilename']))
       server = imaplib.IMAP4_SSL(config['server'], config['port'],
                                  config['keyfilename'], config['certfilename'])
     elif config['usessl']:
-      print "Connecting to '%s' TCP port %d, SSL" % (config['server'], config['port'])
+      print("Connecting to '%s' TCP port %d, SSL" % (config['server'], config['port']))
       server = imaplib.IMAP4_SSL(config['server'], config['port'])
     else:
-      print "Connecting to '%s' TCP port %d" % (config['server'], config['port'])
+      print("Connecting to '%s' TCP port %d" % (config['server'], config['port']))
       server = imaplib.IMAP4(config['server'], config['port'])
  
     # speed up interactions on TCP connections using small packets
     server.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
 
-    print "Logging in as '%s'" % (config['user'])
+    print("Logging in as '%s'" % (config['user']))
     server.login(config['user'], config['pass'])
-  except socket.gaierror, e:
+  except socket.gaierror as e:
     (err, desc) = e
-    print "ERROR: problem looking up server '%s' (%s %s)" % (config['server'], err, desc)
+    print("ERROR: problem looking up server '%s' (%s %s)" % (config['server'], err, desc))
     sys.exit(3)
-  except socket.error, e:
+  except socket.error as e:
     if str(e) == "SSL_CTX_use_PrivateKey_file error":
-      print "ERROR: error reading private key file '%s'" % (config['keyfilename'])
+      print("ERROR: error reading private key file '%s'" % (config['keyfilename']))
     elif str(e) == "SSL_CTX_use_certificate_chain_file error":
-      print "ERROR: error reading certificate chain file '%s'" % (config['keyfilename'])
+      print("ERROR: error reading certificate chain file '%s'" % (config['keyfilename']))
     else:
-      print "ERROR: could not connect to '%s' (%s)" % (config['server'], e)
+      print("ERROR: could not connect to '%s' (%s)" % (config['server'], e))
  
     sys.exit(4)
  
@@ -624,7 +624,7 @@ def create_folder_structure(names):
       try:
         # print "*** mkdir:", disk_foldername  # *DEBUG
         os.mkdir(disk_foldername)
-      except OSError, e:
+      except OSError as e:
         if e.errno != 17:
           raise
         
@@ -636,11 +636,11 @@ def main():
     names = get_names(server, config['compress'], config['thunderbird'],
                       config['nospinner'])
     if config.get('folders'):
-      dirs = map (lambda x: x.strip(), config.get('folders').split(','))
+      dirs = [x.strip() for x in config.get('folders').split(',')]
       if config['thunderbird']:
         dirs = [i.replace("Inbox", "INBOX", 1) if i.startswith("Inbox") else i                
                 for i in dirs]
-      names = filter (lambda x: x[0] in dirs, names)
+      names = [x for x in names if x[0] in dirs]
  
     # for n, name in enumerate(names): # *DEBUG
     #   print n, name # *DEBUG
@@ -654,7 +654,7 @@ def main():
         fil_messages = scan_file(filename, config['compress'],
                                  config['overwrite'], config['nospinner'])
         new_messages = {}
-        for msg_id in fol_messages.keys():
+        for msg_id in list(fol_messages.keys()):
           if msg_id not in fil_messages:
             new_messages[msg_id] = fol_messages[msg_id]
  
@@ -663,17 +663,17 @@ def main():
  
         download_messages(server, filename, new_messages, config)
  
-      except SkipFolderException, e:
-        print e
+      except SkipFolderException as e:
+        print(e)
  
-    print "Disconnecting"
+    print("Disconnecting")
     server.logout()
-  except socket.error, e:
+  except socket.error as e:
     (err, desc) = e
-    print "ERROR: %s %s" % (err, desc)
+    print("ERROR: %s %s" % (err, desc))
     sys.exit(4)
-  except imaplib.IMAP4.error, e:
-    print "ERROR:", e
+  except imaplib.IMAP4.error as e:
+    print("ERROR:", e)
     sys.exit(5)
  
  
