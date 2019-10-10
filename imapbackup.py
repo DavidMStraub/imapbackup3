@@ -43,9 +43,21 @@ __contributors__ = "jwagnerhki, Bob Ippolito, Michael Leonhard, Giuseppe Scrivan
 # - Support host:port
 # - Cleaned up code using PyLint to identify problems
 #   pylint -f html --indent-string="  " --max-line-length=90 imapbackup.py > report.html
-import getpass, os, gc, sys, time, platform, getopt
-import mailbox, imaplib, socket
-import re, hashlib, gzip, bz2
+
+import bz2
+import gc
+import getopt
+import getpass
+import gzip
+import hashlib
+import imaplib
+import mailbox
+import os
+import platform
+import re
+import socket
+import sys
+import time
 
 
 class SkipFolderException(Exception):
@@ -840,4 +852,3 @@ if "Windows" in platform.platform() and "2.3.5" == platform.python_version():
 if __name__ == "__main__":
     gc.enable()
     main()
-
