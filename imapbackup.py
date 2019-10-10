@@ -48,12 +48,10 @@ import bz2
 import gc
 import getopt
 import getpass
-import gzip
 import hashlib
 import imaplib
 import mailbox
 import os
-import platform
 import re
 import socket
 import sys
@@ -111,7 +109,7 @@ def pretty_byte_count(num):
 
 
 # Regular expressions for parsing
-MSGID_RE = re.compile("^Message\-Id\: (.+)", re.IGNORECASE + re.MULTILINE)
+MSGID_RE = re.compile(r"^Message\-Id\: (.+)", re.IGNORECASE + re.MULTILINE)
 BLANKS_RE = re.compile(r"\s+", re.MULTILINE)
 
 # Constants
@@ -147,21 +145,16 @@ def download_messages(server, filename, messages, config):
             print("Deleting", filename)
             os.remove(filename)
         return []
-    else:
-        assert "bzip2" != config["compress"]
 
-    # Open disk file
-    if config["compress"] == "gzip":
-        mbox = gzip.GzipFile(filename, "ab", 9)
-    elif config["compress"] == "bzip2":
-        mbox = bz2.BZ2File(filename, "wb", 512 * 1024, 9)
-    else:
-        mbox = file(filename, "ab")
+    # disable compression
+    assert not config["compress"]
+
+    mbox = open(filename, "ab")
 
     # the folder has already been selected by scanFolder()
 
     # nothing to do
-    if not len(messages):
+    if not messages:
         print("New messages: 0")
         mbox.close()
         return
@@ -173,22 +166,22 @@ def download_messages(server, filename, messages, config):
     total = biggest = 0
 
     # each new message
-    for msg_id in list(messages.keys()):
+    for msg_id in messages:
 
         # This "From" and the terminating newline below delimit messages
         # in mbox files.  Note that RFC 4155 specifies that the date be
         # in the same format as the output of ctime(3), which is required
         # by ISO C to use English day and month abbreviations.
-        buf = "From nobody %s\n" % time.ctime()
+        buf = "From nobody {}\n".format(time.ctime())
         # If this is one of our synthesised Message-IDs, insert it before
         # the other headers
         if UUID in msg_id:
-            buf = buf + "Message-Id: %s\n" % msg_id
+            buf = buf + "Message-Id: {}\n".format(msg_id)
         mbox.write(buf)
 
         # fetch message
         typ, data = server.fetch(messages[msg_id], "RFC822")
-        assert "OK" == typ
+        assert typ == "OK"
         text = data[0][1].strip().replace("\r", "")
         if config["thunderbird"]:
             # This avoids Thunderbird mistaking a line starting "From  " as the start
@@ -208,8 +201,8 @@ def download_messages(server, filename, messages, config):
     mbox.close()
     spinner.stop()
     print(
-        ": %s total, %s for largest message"
-        % (pretty_byte_count(total), pretty_byte_count(biggest))
+        ": {} total, {} for largest message"
+        .format(pretty_byte_count(total), pretty_byte_count(biggest))
     )
 
 
@@ -218,8 +211,9 @@ def scan_file(filename, compress, overwrite, nospinner):
     # file will be overwritten
     if overwrite:
         return []
-    else:
-        assert "bzip2" != compress
+
+    if compress:
+        raise NotImplementedError("Cannot work with compressed files")
 
     # file doesn't exist
     if not os.path.exists(filename):
@@ -228,19 +222,13 @@ def scan_file(filename, compress, overwrite, nospinner):
 
     spinner = Spinner("File %s" % (filename), nospinner)
 
-    # open the file
-    if compress == "gzip":
-        mbox = gzip.GzipFile(filename, "rb")
-    elif compress == "bzip2":
-        mbox = bz2.BZ2File(filename, "rb")
-    else:
-        mbox = file(filename, "rb")
+    mbox = open(filename, "rb")
 
     messages = {}
 
     # each message
     i = 0
-    for message in mailbox.PortableUnixMailbox(mbox):
+    for message in mailbox.mbox(filename):
         header = ""
         # We assume all messages on disk have message-ids
         try:
@@ -248,7 +236,7 @@ def scan_file(filename, compress, overwrite, nospinner):
         except KeyError:
             # No message ID was found. Warn the user and move on
             print()
-            print("WARNING: Message #%d in %s" % (i, filename), end=" ")
+            print("WARNING: Message #{} in {}".format(i, filename), end=" ")
             print("has no Message-Id header.")
 
         header = BLANKS_RE.sub(" ", header.strip())
@@ -261,7 +249,7 @@ def scan_file(filename, compress, overwrite, nospinner):
             # Message-Id was found but could somehow not be parsed by regexp
             # (highly bloody unlikely)
             print()
-            print("WARNING: Message #%d in %s" % (i, filename), end=" ")
+            print("WARNING: Message #{} in {}".format(i, filename), end=" ")
             print("has a malformed Message-Id header.")
         spinner.spin()
         i = i + 1
@@ -276,10 +264,10 @@ def scan_file(filename, compress, overwrite, nospinner):
 def scan_folder(server, foldername, nospinner):
     """Gets IDs of messages in the specified folder, returns id:num dict"""
     messages = {}
-    spinner = Spinner("Folder %s" % (foldername), nospinner)
+    spinner = Spinner("Folder {}".format(foldername), nospinner)
     try:
         typ, data = server.select(foldername, readonly=True)
-        if "OK" != typ:
+        if typ != "OK":
             raise SkipFolderException("SELECT failed: %s" % (data))
         num_msgs = int(data[0])
 
@@ -287,7 +275,7 @@ def scan_folder(server, foldername, nospinner):
         for num in range(1, num_msgs + 1):
             # Retrieve Message-Id, making sure we don't mark all messages as read
             typ, data = server.fetch(num, "(BODY.PEEK[HEADER.FIELDS (MESSAGE-ID)])")
-            if "OK" != typ:
+            if typ != "OK":
                 raise SkipFolderException("FETCH %s failed: %s" % (num, data))
 
             header = data[0][1].strip()
@@ -304,8 +292,8 @@ def scan_folder(server, foldername, nospinner):
                 typ, data = server.fetch(
                     num, "(BODY[HEADER.FIELDS (FROM TO CC DATE SUBJECT)])"
                 )
-                if "OK" != typ:
-                    raise SkipFolderException("FETCH %s failed: %s" % (num, data))
+                if typ != "OK":
+                    raise SkipFolderException("FETCH {} failed: {}".format(num, data))
                 header = data[0][1].strip()
                 header = header.replace("\r\n", "\t")
                 messages[
@@ -317,7 +305,7 @@ def scan_folder(server, foldername, nospinner):
         print(":", end=" ")
 
     # done
-    print("%d messages" % (len(list(messages.keys()))))
+    print("{} messages".format(len(list(messages.keys()))))
     return messages
 
 
@@ -349,7 +337,7 @@ def parse_paren_list(row):
             result.append(name_attrib)
 
     # eat ending paren
-    assert ")" == row[0]
+    assert row[0] == ")"
     row = row[1:]
 
     # done!
@@ -358,7 +346,7 @@ def parse_paren_list(row):
 
 def parse_string_list(row):
     """Parses the quoted and unquoted strings at the end of a LIST response"""
-    slist = re.compile('\s*(?:"([^"]+)")\s*|\s*(\S+)\s*').split(row)
+    slist = re.compile(r'\s*(?:"([^"]+)")\s*|\s*(\S+)\s*').split(row)
     return [s for s in slist if s]
 
 
@@ -380,7 +368,7 @@ def get_hierarchy_delimiter(server):
     lst = parse_list(data[0])  # [attribs, hierarchy delimiter, root name]
     hierarchy_delim = lst[1]
     # NIL if there is no hierarchy
-    if "NIL" == hierarchy_delim:
+    if hierarchy_delim == "NIL":
         hierarchy_delim = "."
     return hierarchy_delim
 
@@ -505,7 +493,7 @@ def process_cline():
     errors = []
 
     # empty command line
-    if not len(opts) and not len(extraargs):
+    if not opts and not extraargs:
         print_usage()
 
     # process each command line option, save in config
@@ -563,14 +551,9 @@ def process_cline():
 def check_config(config, warnings, errors):
     """Checks the config for consistency, returns (config, warnings, errors)"""
 
-    if config["compress"] == "bzip2" and config["overwrite"] == False:
+    if config["compress"] != "none":
         errors.append(
-            "Cannot append new messages to mbox.bz2 files.  Please specify -y."
-        )
-    if config["compress"] == "gzip" and config["overwrite"] == False:
-        warnings.append(
-            "Appending new messages to mbox.gz files is very slow.  Please Consider\n"
-            "  using -y and compressing the files yourself with gzip -9 *.mbox"
+            "Compression not supported."
         )
     if "server" not in config:
         errors.append("No server specified.")
@@ -632,7 +615,7 @@ def get_config():
     # show errors, exit
     for error in errors:
         print("ERROR", error)
-    if len(errors):
+    if errors:
         sys.exit(2)
 
     # prompt for password, if necessary
@@ -655,7 +638,7 @@ def get_config():
 def connect_and_login(config):
     """Connects to the server and logs in.  Returns IMAP4 object."""
     try:
-        assert not (("keyfilename" in config) ^ ("certfilename" in config))
+        assert not ("keyfilename" in config) ^ ("certfilename" in config)
         if config["timeout"]:
             socket.setdefaulttimeout(config["timeout"])
 
@@ -687,25 +670,25 @@ def connect_and_login(config):
 
         print("Logging in as '%s'" % (config["user"]))
         server.login(config["user"], config["pass"])
-    except socket.gaierror as e:
-        (err, desc) = e
+    except socket.gaierror as err:
+        (err, desc) = err
         print(
             "ERROR: problem looking up server '%s' (%s %s)"
             % (config["server"], err, desc)
         )
         sys.exit(3)
-    except socket.error as e:
-        if str(e) == "SSL_CTX_use_PrivateKey_file error":
+    except socket.error as err:
+        if str(err) == "SSL_CTX_use_PrivateKey_file error":
             print(
-                "ERROR: error reading private key file '%s'" % (config["keyfilename"])
+                "ERROR: error reading private key file '{}'".format(config["keyfilename"])
             )
-        elif str(e) == "SSL_CTX_use_certificate_chain_file error":
+        elif str(err) == "SSL_CTX_use_certificate_chain_file error":
             print(
                 "ERROR: error reading certificate chain file '%s'"
                 % (config["keyfilename"])
             )
         else:
-            print("ERROR: could not connect to '%s' (%s)" % (config["server"], e))
+            print("ERROR: could not connect to '{}' ({})".format(config["server"], err))
 
         sys.exit(4)
 
@@ -767,17 +750,13 @@ def main():
 
                 download_messages(server, filename, new_messages, config)
 
-            except SkipFolderException as e:
-                print(e)
+            except SkipFolderException as err:
+                print(err)
 
         print("Disconnecting")
         server.logout()
-    except socket.error as e:
-        (err, desc) = e
-        print("ERROR: %s %s" % (err, desc))
-        sys.exit(4)
-    except imaplib.IMAP4.error as e:
-        print("ERROR:", e)
+    except (socket.error, imaplib.IMAP4.error) as err:
+        print("ERROR:", err)
         sys.exit(5)
 
 
@@ -795,60 +774,5 @@ if sys.stdin.isatty():
     sys.excepthook = cli_exception
 
 
-# Hideous fix to counteract http://python.org/sf/1092502
-# (which should have been fixed ages ago.)
-# Also see http://python.org/sf/1441530
-def _fixed_socket_read(self, size=-1):
-    data = self._rbuf
-    if size < 0:
-        # Read until EOF
-        buffers = []
-        if data:
-            buffers.append(data)
-        self._rbuf = ""
-        if self._rbufsize <= 1:
-            recv_size = self.default_bufsize
-        else:
-            recv_size = self._rbufsize
-        while True:
-            data = self._sock.recv(recv_size)
-            if not data:
-                break
-            buffers.append(data)
-        return "".join(buffers)
-    else:
-        # Read until size bytes or EOF seen, whichever comes first
-        buf_len = len(data)
-        if buf_len >= size:
-            self._rbuf = data[size:]
-            return data[:size]
-        buffers = []
-        if data:
-            buffers.append(data)
-        self._rbuf = ""
-        while True:
-            left = size - buf_len
-            recv_size = min(self._rbufsize, left)  # the actual fix
-            data = self._sock.recv(recv_size)
-            if not data:
-                break
-            buffers.append(data)
-            n = len(data)
-            if n >= left:
-                self._rbuf = data[left:]
-                buffers[-1] = data[:left]
-                break
-            buf_len += n
-        return "".join(buffers)
-
-
-# Platform detection to enable socket patch
-if "Darwin" in platform.platform() and "2.3.5" == platform.python_version():
-    socket._fileobject.read = _fixed_socket_read
-# 20181212: Windows 10 + Python 2.7 doesn't need this fix (fix leads to error: object of type 'cStringIO.StringO' has no len())
-if "Windows" in platform.platform() and "2.3.5" == platform.python_version():
-    socket._fileobject.read = _fixed_socket_read
-
 if __name__ == "__main__":
-    gc.enable()
     main()
