@@ -13,6 +13,7 @@ import re
 import socket
 import sys
 import time
+import logging
 
 
 class SkipFolderException(Exception):
@@ -22,7 +23,7 @@ class SkipFolderException(Exception):
 
 
 class Spinner:
-    """Prints out message with cute spinner, indicating progress"""
+    """logging.infos out message with cute spinner, indicating progress"""
 
     def __init__(self, message, nospinner):
         """Spinner constructor"""
@@ -94,12 +95,12 @@ class MailBoxHandler:
 
         if self.overwrite:
             if os.path.exists(self.path):
-                print("Deleting", self.path)
+                logging.info("Deleting", self.path)
                 os.remove(self.path)
             return []
 
         if not messages:
-            print("New messages: 0")
+            logging.info("New messages: 0")
             return
 
         self.open_mbox()
@@ -117,7 +118,7 @@ class MailBoxHandler:
             )
         self.close_mbox()
         spinner.stop()
-        print(
+        logging.info(
             ": {} total, {} for largest message".format(
                 pretty_byte_count(total), pretty_byte_count(biggest)
             )
@@ -148,7 +149,7 @@ class MailBoxHandler:
         spinner.spin()
 
         spinner.stop()
-        print(
+        logging.info(
             ": {} total, {} for largest message".format(
                 pretty_byte_count(total), pretty_byte_count(biggest)
             )
@@ -175,9 +176,10 @@ class MailBoxHandler:
             # We assume all messages on disk have message-ids
             msg_id = message["message-id"]
             if not msg_id:
-                print()
-                print("WARNING: Message #{} in {}".format(i, self.path), end=" ")
-                print("has no Message-Id header.")
+                logging.info(
+                    "\nWARNING: Message #{} in {}".format(i, self.path)
+                    + "has no Message-Id header."
+                )
                 continue
             messages[msg_id] = msg_id
             spinner.spin()
@@ -186,7 +188,7 @@ class MailBoxHandler:
         # done
         self.close_mbox()
         spinner.stop()
-        print(": %d messages" % (len(list(messages.keys()))))
+        logging.info(": %d messages" % (len(list(messages.keys()))))
         return messages
 
 
@@ -232,46 +234,50 @@ class MailServerHandler:
             if self.timeout:
                 socket.setdefaulttimeout(self.timeout)
             if self.usessl and self.keyfilename:
-                print(
-                    "Connecting to '%s' TCP port %d," % (self.host, self.port), end=" "
+                logging.info(
+                    "Connecting to '%s' TCP port %d," % (self.host, self.port)
+                    + "SSL, key from %s," % (self.keyfilename)
+                    + " cert from %s " % (self.certfilename)
                 )
-                print("SSL, key from %s," % (self.keyfilename), end=" ")
-                print("cert from %s " % (self.certfilename))
                 server = imaplib.IMAP4_SSL(
                     self.host, self.port, self.keyfilename, self.certfilename
                 )
             elif self.usessl:
-                print("Connecting to '%s' TCP port %d, SSL" % (self.host, self.port))
+                logging.info(
+                    "Connecting to '%s' TCP port %d, SSL" % (self.host, self.port)
+                )
                 server = imaplib.IMAP4_SSL(self.host, self.port)
             else:
-                print("Connecting to '%s' TCP port %d" % (self.host, self.port))
+                logging.info("Connecting to '%s' TCP port %d" % (self.host, self.port))
                 server = imaplib.IMAP4(self.host, self.port)
 
             # speed up interactions on TCP connections using small packets
             server.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
 
-            print("Logging in as '%s'" % (self.user))
+            logging.info("Logging in as '%s'" % (self.user))
             server.login(self.user, self.password)
         except socket.gaierror as err:
             (err, desc) = err
-            print(
+            logging.info(
                 "ERROR: problem looking up server '%s' (%s %s)" % (self.host, err, desc)
             )
             sys.exit(3)
         except socket.error as err:
             if str(err) == "SSL_CTX_use_PrivateKey_file error":
-                print(
+                logging.info(
                     "ERROR: error reading private key file '{}'".format(
                         self.keyfilename
                     )
                 )
             elif str(err) == "SSL_CTX_use_certificate_chain_file error":
-                print(
+                logging.info(
                     "ERROR: error reading certificate chain file '%s'"
                     % (self.keyfilename)
                 )
             else:
-                print("ERROR: could not connect to '{}' ({})".format(self.host, err))
+                logging.info(
+                    "ERROR: could not connect to '{}' ({})".format(self.host, err)
+                )
 
             sys.exit(4)
 
@@ -328,10 +334,10 @@ class MailServerHandler:
                 spinner.spin()
         finally:
             spinner.stop()
-            print(":", end=" ")
+            logging.info(":")
 
         # done
-        print("{} messages".format(len(list(messages.keys()))))
+        logging.info("{} messages".format(len(list(messages.keys()))))
         return messages
 
     def get_hierarchy_delimiter(self):
@@ -375,13 +381,13 @@ class MailServerHandler:
                     filename = filename.replace("INBOX", "Inbox")
             else:
                 filename = ".".join(foldername.split(delim)) + ".mbox" + suffix
-            # print "\n*** Folder:", foldername # *DEBUG
-            # print "***   File:", filename # *DEBUG
+            # logging.info "\n*** Folder:", foldername # *DEBUG
+            # logging.info "***   File:", filename # *DEBUG
             names.append((foldername, filename))
 
         # done
         spinner.stop()
-        print(": %s folders" % (len(names)))
+        logging.info(": %s folders" % (len(names)))
         return names
 
 
@@ -408,7 +414,7 @@ def parse_paren_list(row):
             assert match != None
             name_attrib = row[match.start() : match.end()]
             row = row[match.end() :]
-            # print "MATCHED '%s' '%s'" % (name_attrib, row)
+            # logging.info "MATCHED '%s' '%s'" % (name_attrib, row)
             name_attrib = name_attrib.strip()
             result.append(name_attrib)
 

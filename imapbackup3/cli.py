@@ -3,11 +3,14 @@
 import getopt
 import getpass
 import imaplib
+import logging
 import os
 import socket
 import sys
 
 from .imapbackup import MailBoxHandler, MailServerHandler, SkipFolderException
+
+logging.basicConfig(level=logging.INFO)
 
 
 def string_from_file(value):
@@ -229,11 +232,11 @@ def get_config():
 
     # show warnings
     for warning in warnings:
-        print("WARNING:", warning)
+        logging.warn("WARNING:", warning)
 
     # show errors, exit
     for error in errors:
-        print("ERROR", error)
+        logging.error("ERROR", error)
     if errors:
         sys.exit(2)
 
@@ -308,12 +311,12 @@ def _main():
                 box.download_messages(new_messages)
 
             except SkipFolderException as err:
-                print(err)
+                logging.error(err)
 
-        print("Disconnecting")
+        logging.info("Disconnecting")
         server.server.logout()
     except (socket.error, imaplib.IMAP4.error) as err:
-        print("ERROR:", err)
+        logging.error("ERROR:", err)
         sys.exit(5)
 
 
