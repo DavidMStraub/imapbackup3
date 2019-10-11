@@ -78,9 +78,7 @@ class MailBoxHandler:
 
         self.open_mbox()
 
-        logger.info(
-            "Downloading %s new messages to %s ...", len(messages), self.path
-        )
+        logger.info("Downloading %s new messages to %s ...", len(messages), self.path)
 
         total = biggest = 0
 
@@ -90,12 +88,6 @@ class MailBoxHandler:
                 msg_id, messages[msg_id], total, biggest
             )
         self.close_mbox()
-
-        logger.info(
-            ": %s total, %s for largest message",
-            pretty_byte_count(total),
-            pretty_byte_count(biggest),
-        )
 
     def download_message(self, msg_id, num, total, biggest):
         # This "From" and the terminating newline below delimit messages
@@ -147,8 +139,9 @@ class MailBoxHandler:
             msg_id = message["message-id"]
             if not msg_id:
                 logger.info(
-                    "\nWARNING: Message #%d in %s has no Message-Id header.",
-                    i, self.path
+                    "WARNING: Message #%d in %s has no Message-Id header",
+                    i,
+                    self.path,
                 )
                 continue
             messages[msg_id] = msg_id
@@ -158,7 +151,7 @@ class MailBoxHandler:
         # done
         self.close_mbox()
 
-        logger.info(": %d messages", (len(list(messages.keys()))))
+        logger.info("Found %d messages", len(messages))
         return messages
 
 
@@ -190,12 +183,12 @@ class MailServerHandler:
         assert typ == "OK"
         for encoding in ["utf-8", "latin1"]:
             try:
-                text = data[0][1].decode(encoding).strip().replace("\r", "")
-            except:
+                text = data[0][1].decode(encoding)
+            except UnicodeDecodeError:
                 text = None
         if text is None:
-            raise ValueError(data[0][1])
-        del data
+            text = data[0][1].decode("utf-8", "backslashreplace")
+        text = text.strip().replace("\r", "")
         return text
 
     def connect_and_login(self):
@@ -300,13 +293,11 @@ class MailServerHandler:
                         + hashlib.sha1(header.encode()).hexdigest()
                         + ">"
                     ] = num
-
         finally:
-
-            logger.info(":")
+            pass
 
         # done
-        logger.info("%d messages", len(list(messages)))
+        logger.info("Found %d messages", len(messages))
         return messages
 
     def get_hierarchy_delimiter(self):
@@ -353,7 +344,7 @@ class MailServerHandler:
 
         # done
 
-        logger.info(": %s folders", len(names))
+        logger.info("Found %s folders", len(names))
         return names
 
 
