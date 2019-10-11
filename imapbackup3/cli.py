@@ -233,11 +233,11 @@ def get_config():
 
     # show warnings
     for warning in warnings:
-        logger.warn("WARNING:", warning)
+        logger.warning("WARNING: %s", warning)
 
     # show errors, exit
     for error in errors:
-        logger.error("ERROR", error)
+        logger.error("ERROR %s", error)
     if errors:
         sys.exit(2)
 
@@ -266,8 +266,8 @@ def create_folder_structure(names):
             try:
                 # print "*** mkdir:", disk_foldername  # *DEBUG
                 os.mkdir(disk_foldername)
-            except OSError as e:
-                if e.errno != 17:
+            except OSError as err:
+                if err.errno != 17:
                     raise
 
 
@@ -317,7 +317,7 @@ def _main():
         logger.info("Disconnecting")
         server.server.logout()
     except (socket.error, imaplib.IMAP4.error) as err:
-        logger.error("ERROR:", err)
+        logger.error("ERROR: %s", err)
         sys.exit(5)
 
 

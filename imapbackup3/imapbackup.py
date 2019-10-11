@@ -16,41 +16,11 @@ import time
 import logging
 
 
-logger = logging.getLogger('imapbackup3')
+logger = logging.getLogger("imapbackup3")
 
 
 class SkipFolderException(Exception):
     """Indicates aborting processing of current folder, continue with next folder."""
-
-    pass
-
-
-class Spinner:
-    """logger.infos out message with cute spinner, indicating progress"""
-
-    def __init__(self, message, nospinner):
-        """Spinner constructor"""
-        self.glyphs = "|/-\\"
-        self.pos = 0
-        self.message = message
-        self.nospinner = nospinner
-        sys.stdout.write(message)
-        sys.stdout.flush()
-        self.spin()
-
-    def spin(self):
-        """Rotate the spinner"""
-        if sys.stdin.isatty() and not self.nospinner:
-            sys.stdout.write("\r" + self.message + " " + self.glyphs[self.pos])
-            sys.stdout.flush()
-            self.pos = (self.pos + 1) % len(self.glyphs)
-
-    def stop(self):
-        """Erase the spinner from the screen"""
-        if sys.stdin.isatty() and not self.nospinner:
-            sys.stdout.write("\r" + self.message + "  ")
-            sys.stdout.write("\r" + self.message)
-            sys.stdout.flush()
 
 
 def pretty_byte_count(num):
@@ -98,7 +68,7 @@ class MailBoxHandler:
 
         if self.overwrite:
             if os.path.exists(self.path):
-                logger.info("Deleting %", self.path)
+                logger.info("Deleting %s", self.path)
                 os.remove(self.path)
             return []
 
@@ -108,8 +78,8 @@ class MailBoxHandler:
 
         self.open_mbox()
 
-        spinner = Spinner(
-            "Downloading %s new messages to %s" % (len(messages), self.path), False
+        logger.info(
+            "Downloading %s new messages to %s ...", len(messages), self.path
         )
 
         total = biggest = 0
@@ -117,17 +87,17 @@ class MailBoxHandler:
         # each new message
         for msg_id in messages:
             total, biggest = self.download_message(
-                self.mbox, msg_id, messages[msg_id], spinner, total, biggest
+                msg_id, messages[msg_id], total, biggest
             )
         self.close_mbox()
-        spinner.stop()
+
         logger.info(
             ": %s total, %s for largest message",
             pretty_byte_count(total),
-            pretty_byte_count(biggest)
+            pretty_byte_count(biggest),
         )
 
-    def download_message(self, mbox, msg_id, num, spinner, total, biggest):
+    def download_message(self, msg_id, num, total, biggest):
         # This "From" and the terminating newline below delimit messages
         # in mbox files.  Note that RFC 4155 specifies that the date be
         # in the same format as the output of ctime(3), which is required
@@ -149,13 +119,11 @@ class MailBoxHandler:
         total += size
 
         gc.collect()
-        spinner.spin()
 
-        spinner.stop()
         logger.info(
             ": %s total, %s for largest message",
             pretty_byte_count(total),
-            pretty_byte_count(biggest)
+            pretty_byte_count(biggest),
         )
 
         return total, biggest
@@ -163,11 +131,10 @@ class MailBoxHandler:
     def scan_file(self):
         """Gets IDs of messages in the specified mbox file"""
         # file will be overwritten
-        nospinner = False
         if self.overwrite:
             return []
 
-        spinner = Spinner("File %s" % (self.path), nospinner)
+        logger.info("File %s ...", (self.path))
 
         self.open_mbox()
 
@@ -180,17 +147,17 @@ class MailBoxHandler:
             msg_id = message["message-id"]
             if not msg_id:
                 logger.info(
-                    "\nWARNING: Message #{} in {}".format(i, self.path)
-                    + "has no Message-Id header."
+                    "\nWARNING: Message #%d in %s has no Message-Id header.",
+                    i, self.path
                 )
                 continue
             messages[msg_id] = msg_id
-            spinner.spin()
+
             i = i + 1
 
         # done
         self.close_mbox()
-        spinner.stop()
+
         logger.info(": %d messages", (len(list(messages.keys()))))
         return messages
 
@@ -242,7 +209,7 @@ class MailServerHandler:
                     self.host,
                     self.port,
                     self.keyfilename,
-                    self.certfilename
+                    self.certfilename,
                 )
                 server = imaplib.IMAP4_SSL(
                     self.host, self.port, self.keyfilename, self.certfilename
@@ -264,10 +231,7 @@ class MailServerHandler:
         except socket.gaierror as err:
             (err, desc) = err
             logger.info(
-                "ERROR: problem looking up server '%s' (%s %s)",
-                self.host,
-                err,
-                desc
+                "ERROR: problem looking up server '%s' (%s %s)", self.host, err, desc
             )
             sys.exit(3)
         except socket.error as err:
@@ -280,14 +244,10 @@ class MailServerHandler:
             elif str(err) == "SSL_CTX_use_certificate_chain_file error":
                 logger.info(
                     "ERROR: error reading certificate chain file '%s'",
-                    (self.keyfilename)
+                    (self.keyfilename),
                 )
             else:
-                logger.info(
-                    "ERROR: could not connect to '%' (%)",
-                    self.host,
-                    err
-                )
+                logger.info("ERROR: could not connect to '%s' (%s)", self.host, err)
 
             sys.exit(4)
 
@@ -296,9 +256,8 @@ class MailServerHandler:
 
     def scan_folder(self, foldername):
         """Gets IDs of messages in the specified folder, returns id:num dict"""
-        nospinner = False
         messages = {}
-        spinner = Spinner("Folder {}".format(foldername), nospinner)
+        logger.info("Folder %s ...", foldername)
         try:
             typ, data = self.server.select(foldername, readonly=True)
             if typ != "OK":
@@ -341,9 +300,9 @@ class MailServerHandler:
                         + hashlib.sha1(header.encode()).hexdigest()
                         + ">"
                     ] = num
-                spinner.spin()
+
         finally:
-            spinner.stop()
+
             logger.info(":")
 
         # done
@@ -365,18 +324,15 @@ class MailServerHandler:
 
     def get_names(self, thunderbird=False, compress="none"):
         """Get list of folders, returns [(FolderName,FileName)]"""
-        nospinner = False
 
-        spinner = Spinner("Finding Folders", nospinner)
+        logger.info("Finding Folders ...")
 
         # Get hierarchy delimiter
         delim = self.get_hierarchy_delimiter()
-        spinner.spin()
 
         # Get LIST of all folders
         typ, data = self.server.list()
         assert typ == "OK"
-        spinner.spin()
 
         names = []
 
@@ -396,7 +352,7 @@ class MailServerHandler:
             names.append((foldername, filename))
 
         # done
-        spinner.stop()
+
         logger.info(": %s folders", len(names))
         return names
 
@@ -410,7 +366,7 @@ def parse_paren_list(row):
     result = []
 
     # NOTE: RFC3501 doesn't fully define the format of name attributes
-    name_attrib_re = re.compile("^\s*(\\\\[a-zA-Z0-9_]+)\s*")
+    name_attrib_re = re.compile(r"^\s*(\\[a-zA-Z0-9_]+)\s*")
 
     # eat name attributes until ending paren
     while row[0] != ")":
@@ -421,7 +377,7 @@ def parse_paren_list(row):
         # consume name attribute
         else:
             match = name_attrib_re.search(row)
-            assert match != None
+            assert match is not None
             name_attrib = row[match.start() : match.end()]
             row = row[match.end() :]
             # logger.info "MATCHED '%s' '%s'" % (name_attrib, row)
@@ -449,4 +405,3 @@ def parse_list(row):
     string_list = parse_string_list(row)
     assert len(string_list) == 2
     return [paren_list] + string_list
-
