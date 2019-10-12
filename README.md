@@ -46,6 +46,7 @@ optional arguments:
 Minimal example (using SSL on port 993):
 
 ```python
+from imapbackup3 import IMAPBackup
 with IMAPBackup(host='mail.example.com', user='myuser', password='mypassword') as imb:
     imb.download_all_messages()
 ```
@@ -53,6 +54,7 @@ with IMAPBackup(host='mail.example.com', user='myuser', password='mypassword') a
 Full example:
 
 ```python
+from imapbackup3 import IMAPBackup
 with IMAPBackup(
     host='mail.example.com',
     user='myuser',
