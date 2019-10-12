@@ -8,7 +8,10 @@ import os
 import socket
 import sys
 
-from .imapbackup import MailBoxHandler, MailServerHandler, SkipFolderException
+from .imapbackup import (
+    IMAPBackup,
+    SkipFolderException,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("imapbackup3")
@@ -33,19 +36,6 @@ def string_from_file(value):
 
     with open(os.path.expanduser(value[1:]), "r") as content:
         return content.read().strip()
-
-
-def create_folder_structure(names):
-    """ Create the folder structure on disk """
-    for imap_foldername, filename in sorted(names):
-        disk_foldername = os.path.split(filename)[0]
-        if disk_foldername:
-            try:
-                # print "*** mkdir:", disk_foldername  # *DEBUG
-                os.mkdir(disk_foldername)
-            except OSError as err:
-                if err.errno != 17:
-                    raise
 
 
 def get_config():
@@ -128,59 +118,21 @@ def get_config():
     return args
 
 
-def _main():
+def main():
     """Main entry point"""
     try:
         config = get_config()
-        server = MailServerHandler(
+        imb = IMAPBackup(
             host=config.server,
             user=config.user,
             password=config.password,
             port=config.port,
             usessl=config.ssl,
         )
-        server.connect_and_login()
-        names = server.get_names()
-        if config.folder:
-            dirs = [x.strip() for x in config.folder.split(",")]
-            if config["thunderbird"]:
-                dirs = [
-                    i.replace("Inbox", "INBOX", 1) if i.startswith("Inbox") else i
-                    for i in dirs
-                ]
-            names = [x for x in names if x[0] in dirs]
-
-        create_folder_structure(names)
-
-        for name_pair in names:
-            try:
-                foldername, filename = name_pair
-                fol_messages = server.scan_folder(foldername)
-                box = MailBoxHandler(filename, server, foldername)
-                fil_messages = box.scan_file()
-                new_messages = {}
-                for msg_id in list(fol_messages.keys()):
-                    if msg_id not in fil_messages:
-                        new_messages[msg_id] = fol_messages[msg_id]
-
-                # for f in new_messages:
-                #  print "%s : %s" % (f, new_messages[f])
-
-                box.download_messages(new_messages)
-
-            except SkipFolderException as err:
-                logger.error(err)
-
-        logger.info("Disconnecting")
-        server.server.logout()
+        imb.download_all_messages()
+        imb.logout()
+    except KeyboardInterrupt:
+        sys.exit(0)
     except (socket.error, imaplib.IMAP4.error) as err:
         logger.error("ERROR: %s", err)
         sys.exit(5)
-
-
-def main():
-    """Main entry point"""
-    try:
-        _main()
-    except KeyboardInterrupt:
-        pass

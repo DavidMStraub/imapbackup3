@@ -113,7 +113,7 @@ class MailBoxHandler:
         gc.collect()
 
         logger.info(
-            ": %s total, %s for largest message",
+            "%s total, %s for largest message",
             pretty_byte_count(total),
             pretty_byte_count(biggest),
         )
@@ -139,9 +139,7 @@ class MailBoxHandler:
             msg_id = message["message-id"]
             if not msg_id:
                 logger.info(
-                    "WARNING: Message #%d in %s has no Message-Id header",
-                    i,
-                    self.path,
+                    "WARNING: Message #%d in %s has no Message-Id header", i, self.path
                 )
                 continue
             messages[msg_id] = msg_id
@@ -396,3 +394,84 @@ def parse_list(row):
     string_list = parse_string_list(row)
     assert len(string_list) == 2
     return [paren_list] + string_list
+
+
+class IMAPBackup:
+    """Main class to back up E-mail messages from an IMAP server."""
+
+    def __init__(
+        self,
+        host,
+        user,
+        password,
+        port=993,
+        usessl=True,
+        keyfilename=None,
+        certfilename=None,
+        timeout=None,
+    ):
+        self.mailserver = MailServerHandler(
+            host=host,
+            user=user,
+            password=password,
+            port=port,
+            usessl=usessl,
+            keyfilename=keyfilename,
+            certfilename=certfilename,
+            timeout=timeout,
+        )
+        self.logged_in = False
+        self._names = None
+
+    def login(self):
+        if not self.logged_in:
+            self.mailserver.connect_and_login()
+            self.logged_in = True
+    
+    def logout(self):
+        if self.logged_in:
+            self.mailserver.server.logout()
+
+    def create_folder_structure(self):
+        """ Create the folder structure on disk """
+        for imap_foldername, filename in sorted(self.names):
+            disk_foldername = os.path.split(filename)[0]
+            if disk_foldername:
+                try:
+                    # print "*** mkdir:", disk_foldername  # *DEBUG
+                    os.mkdir(disk_foldername)
+                except OSError as err:
+                    if err.errno != 17:
+                        raise
+
+    @property
+    def names(self):
+        if not self._names:
+            self._names = self._get_names()
+        return self._names
+
+    def _get_names(self):
+        self.login()
+        return self.mailserver.get_names()
+
+    def download_folder_messages(self, foldername, filename):
+        self.login()
+        fol_messages = self.mailserver.scan_folder(foldername)
+        box = MailBoxHandler(filename, self.mailserver, foldername)
+        fil_messages = box.scan_file()
+        new_messages = {}
+        for msg_id in list(fol_messages.keys()):
+            if msg_id not in fil_messages:
+                new_messages[msg_id] = fol_messages[msg_id]
+
+        box.download_messages(new_messages)
+
+    def download_all_messages(self):
+        for name_pair in self.names:
+            try:
+                foldername, filename = name_pair
+                self.download_folder_messages(foldername, filename)
+
+            except SkipFolderException as err:
+                logger.error(err)
+
