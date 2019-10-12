@@ -139,6 +139,8 @@ def main():
             password=config.password,
             port=config.port,
             usessl=config.ssl,
+            keyfilename=config.key,
+            certfilename=config.cert,
             thunderbird=config.thunderbird,
             folders=config.folders,
             fmt=config.mailbox,
