@@ -48,48 +48,19 @@ UUID = "19AF1258-1AAF-44EF-9D9A-731079D6FAD7"  # Used to generate Message-Ids
 
 
 class MailBoxHandler:
-    def __init__(self, path, mailserver, folder, overwrite=False):
-        self.mailserver = mailserver
+    def __init__(self, path, overwrite=False):
         self.path = path
         self.overwrite = overwrite
-        self.folder = folder
-        self.mbox = None
+        self.mbox = mailbox.mbox(path)
 
     def open_mbox(self):
-        self.mbox = open(self.path, "ab")
-        return self.mbox
+        pass
 
     def close_mbox(self):
-        if self.mbox is not None:
-            self.mbox.close()
+        self.mbox.flush()
 
-    def download_messages(self, messages):
-        """Download messages from folder and append to mailbox"""
-
-        if self.overwrite:
-            if os.path.exists(self.path):
-                logger.info("Deleting %s", self.path)
-                os.remove(self.path)
-            return []
-
-        if not messages:
-            logger.info("New messages: 0")
-            return
-
-        self.open_mbox()
-
-        logger.info("Downloading %s new messages to %s ...", len(messages), self.path)
-
-        total = biggest = 0
-
-        # each new message
-        for msg_id in messages:
-            total, biggest = self.download_message(
-                msg_id, messages[msg_id], total, biggest
-            )
-        self.close_mbox()
-
-    def download_message(self, msg_id, num, total, biggest):
+    
+    def add(self, msg_id, text):
         # This "From" and the terminating newline below delimit messages
         # in mbox files.  Note that RFC 4155 specifies that the date be
         # in the same format as the output of ctime(3), which is required
@@ -99,26 +70,10 @@ class MailBoxHandler:
         # the other headers
         if UUID in msg_id:
             buf = buf + "Message-Id: {}\n".format(msg_id)
-        self.mbox.write(buf.encode())
-
-        # fetch message
-        text = self.mailserver.fetch_message(self.folder, num)
-        self.mbox.write(text.encode())
-        self.mbox.write(b"\n\n")
-
-        size = len(text)
-        biggest = max(size, biggest)
-        total += size
-
-        gc.collect()
-
-        logger.info(
-            "%s total, %s for largest message",
-            pretty_byte_count(total),
-            pretty_byte_count(biggest),
-        )
-
-        return total, biggest
+        
+        buf = buf + text
+        buf = text
+        return self.mbox.add(buf.encode())
 
     def scan_file(self):
         """Gets IDs of messages in the specified mbox file"""
@@ -134,7 +89,7 @@ class MailBoxHandler:
 
         # each message
         i = 0
-        for message in mailbox.mbox(self.path):
+        for message in self.mbox:
             # We assume all messages on disk have message-ids
             msg_id = message["message-id"]
             if not msg_id:
@@ -311,13 +266,10 @@ class MailServerHandler:
             hierarchy_delim = "."
         return hierarchy_delim
 
-    def get_names(self, thunderbird=False, compress="none"):
-        """Get list of folders, returns [(FolderName, FileName)]"""
+    def get_folder_names(self):
+        """Get list of folders"""
 
         logger.info("Finding Folders ...")
-
-        # Get hierarchy delimiter
-        delim = self.get_hierarchy_delimiter()
 
         # Get LIST of all folders
         typ, data = self.server.list()
@@ -329,16 +281,7 @@ class MailServerHandler:
         for row in data:
             lst = parse_list(row)
             foldername = lst[2]
-            suffix = {"none": "", "gzip": ".gz", "bzip2": ".bz2"}[compress]
-            if thunderbird:
-                filename = ".sbd/".join(foldername.split(delim)) + suffix
-                if filename.startswith("INBOX"):
-                    filename = filename.replace("INBOX", "Inbox")
-            else:
-                filename = ".".join(foldername.split(delim)) + ".mbox" + suffix
-            # logger.info "\n*** Folder:", foldername # *DEBUG
-            # logger.info "***   File:", filename # *DEBUG
-            names.append((foldername, filename))
+            names.append(foldername)
 
         # done
 
@@ -411,6 +354,7 @@ class IMAPBackup:
         timeout=None,
         thunderbird=False,
         folders=None,
+        overwrite=False,
     ):
         self.mailserver = MailServerHandler(
             host=host,
@@ -426,6 +370,7 @@ class IMAPBackup:
         self._names = None
         self.thunderbird = thunderbird
         self.folders = folders
+        self.overwrite = overwrite
 
     def __enter__(self):
         self.login()
@@ -442,6 +387,17 @@ class IMAPBackup:
     def logout(self):
         if self.logged_in:
             self.mailserver.server.logout()
+
+    def get_mbox_filename(self, imap_foldername, hierarchy_delimiter):
+        delim = hierarchy_delimiter
+        suffix = ""  # no compression
+        if self.thunderbird:
+            filename = ".sbd/".join(imap_foldername.split(delim)) + suffix
+            if filename.startswith("INBOX"):
+                filename = filename.replace("INBOX", "Inbox")
+        else:
+            filename = ".".join(imap_foldername.split(delim)) + ".mbox" + suffix
+        return filename
 
     def create_folder_structure(self):
         """ Create the folder structure on disk """
@@ -463,22 +419,73 @@ class IMAPBackup:
 
     def _get_names(self):
         self.login()
-        names = self.mailserver.get_names(thunderbird=self.thunderbird)
+        folders = self.mailserver.get_folder_names()
         if self.folders is not None:
-            names = [n for n in names if n[0] in self.folders]
+            folders = [f for f in folders if f in self.folders]
+                # Get hierarchy delimiter
+        delim = self.mailserver.get_hierarchy_delimiter()
+        names = [(f, self.get_mbox_filename(f, delim)) for f in folders]
         return names
+
+
+    def download_message(self, mbox, folder, msg_id, num, total, biggest):
+    
+        # fetch message
+        text = self.mailserver.fetch_message(folder, num)
+
+        mbox.add(msg_id, text)
+
+        size = len(text)
+        biggest = max(size, biggest)
+        total += size
+
+        gc.collect()
+
+        logger.info(
+            "%s total, %s for largest message",
+            pretty_byte_count(total),
+            pretty_byte_count(biggest),
+        )
+
+        return total, biggest
+
+    def download_messages(self, mbox, folder, messages):
+        """Download messages from folder and append to mailbox"""
+
+        if self.overwrite:
+            if os.path.exists(mbox.path):
+                logger.info("Deleting %s", mbox.path)
+                os.remove(mbox.path)
+            return []
+
+        if not messages:
+            logger.info("New messages: 0")
+            return
+
+        mbox.open_mbox()
+
+        logger.info("Downloading %s new messages to %s ...", len(messages), mbox.path)
+
+        total = biggest = 0
+
+        # each new message
+        for msg_id in messages:
+            total, biggest = self.download_message(
+                mbox, folder, msg_id, messages[msg_id], total, biggest
+            )
+        mbox.close_mbox()
 
     def download_folder_messages(self, foldername, filename):
         self.login()
         fol_messages = self.mailserver.scan_folder(foldername)
-        box = MailBoxHandler(filename, self.mailserver, foldername)
+        box = MailBoxHandler(filename)
         fil_messages = box.scan_file()
         new_messages = {}
         for msg_id in list(fol_messages.keys()):
             if msg_id not in fil_messages:
                 new_messages[msg_id] = fol_messages[msg_id]
 
-        box.download_messages(new_messages)
+        self.download_messages(box, foldername, new_messages)
 
     def download_all_messages(self):
         for name_pair in self.names:
@@ -488,4 +495,3 @@ class IMAPBackup:
 
             except SkipFolderException as err:
                 logger.error(err)
-
