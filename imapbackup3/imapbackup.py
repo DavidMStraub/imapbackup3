@@ -4,6 +4,7 @@
 # Original code (C) 2006-2018 Rui Carmo. Code under MIT License.(C)
 
 
+import email
 import gc
 import hashlib
 import imaplib
@@ -12,7 +13,6 @@ import os
 import re
 import socket
 import sys
-import time
 import logging
 
 
@@ -45,67 +45,6 @@ BLANKS_RE = re.compile(r"\s+", re.MULTILINE)
 
 # Constants
 UUID = "19AF1258-1AAF-44EF-9D9A-731079D6FAD7"  # Used to generate Message-Ids
-
-
-class MailBoxHandler:
-    def __init__(self, path, overwrite=False):
-        self.path = path
-        self.overwrite = overwrite
-        self.mbox = mailbox.mbox(path)
-
-    def open_mbox(self):
-        pass
-
-    def close_mbox(self):
-        self.mbox.flush()
-
-    
-    def add(self, msg_id, text):
-        # This "From" and the terminating newline below delimit messages
-        # in mbox files.  Note that RFC 4155 specifies that the date be
-        # in the same format as the output of ctime(3), which is required
-        # by ISO C to use English day and month abbreviations.
-        buf = "From nobody {}\n".format(time.ctime())
-        # If this is one of our synthesised Message-IDs, insert it before
-        # the other headers
-        if UUID in msg_id:
-            buf = buf + "Message-Id: {}\n".format(msg_id)
-        
-        buf = buf + text
-        buf = text
-        return self.mbox.add(buf.encode())
-
-    def scan_file(self):
-        """Gets IDs of messages in the specified mbox file"""
-        # file will be overwritten
-        if self.overwrite:
-            return []
-
-        logger.info("File %s ...", (self.path))
-
-        self.open_mbox()
-
-        messages = {}
-
-        # each message
-        i = 0
-        for message in self.mbox:
-            # We assume all messages on disk have message-ids
-            msg_id = message["message-id"]
-            if not msg_id:
-                logger.info(
-                    "WARNING: Message #%d in %s has no Message-Id header", i, self.path
-                )
-                continue
-            messages[msg_id] = msg_id
-
-            i = i + 1
-
-        # done
-        self.close_mbox()
-
-        logger.info("Found %d messages", len(messages))
-        return messages
 
 
 class MailServerHandler:
@@ -428,12 +367,17 @@ class IMAPBackup:
         return names
 
 
-    def download_message(self, mbox, folder, msg_id, num, total, biggest):
+    def download_message(self, mbox, folder, num, total, biggest):
     
         # fetch message
         text = self.mailserver.fetch_message(folder, num)
 
-        mbox.add(msg_id, text)
+        msg = email.message_from_string(text)
+        if 'message-id' not in msg:
+            msg['message-id'] = "<" + UUID  + "." + hashlib.sha1(header.encode()).hexdigest()  + ">"
+            text = msg.as_string()
+
+        mbox.add(text.encode())
 
         size = len(text)
         biggest = max(size, biggest)
@@ -453,39 +397,40 @@ class IMAPBackup:
         """Download messages from folder and append to mailbox"""
 
         if self.overwrite:
-            if os.path.exists(mbox.path):
-                logger.info("Deleting %s", mbox.path)
-                os.remove(mbox.path)
+            if os.path.exists(mbox._path):
+                logger.info("Deleting %s", mbox._path)
+                os.remove(mbox._path)
             return []
 
         if not messages:
             logger.info("New messages: 0")
             return
 
-        mbox.open_mbox()
+        mbox.lock()
 
-        logger.info("Downloading %s new messages to %s ...", len(messages), mbox.path)
+        logger.info("Downloading %s new messages to %s ...", len(messages), mbox._path)
 
         total = biggest = 0
 
         # each new message
         for msg_id in messages:
             total, biggest = self.download_message(
-                mbox, folder, msg_id, messages[msg_id], total, biggest
+                mbox, folder, messages[msg_id], total, biggest
             )
-        mbox.close_mbox()
+        mbox.flush()
+        mbox.unlock()
 
     def download_folder_messages(self, foldername, filename):
         self.login()
         fol_messages = self.mailserver.scan_folder(foldername)
-        box = MailBoxHandler(filename)
-        fil_messages = box.scan_file()
+        mbox = mailbox.mbox(filename)
+        fil_messages = {msg['message-id']: num for num, msg in mbox.items()}
         new_messages = {}
         for msg_id in list(fol_messages.keys()):
             if msg_id not in fil_messages:
                 new_messages[msg_id] = fol_messages[msg_id]
 
-        self.download_messages(box, foldername, new_messages)
+        self.download_messages(mbox, foldername, new_messages)
 
     def download_all_messages(self):
         for name_pair in self.names:
