@@ -8,10 +8,7 @@ import os
 import socket
 import sys
 
-from .imapbackup import (
-    IMAPBackup,
-    SkipFolderException,
-)
+from .imapbackup import IMAPBackup, SkipFolderException
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("imapbackup3")
@@ -49,7 +46,7 @@ def get_config():
         help="Overwite existing mbox files instead of appending",
     )
     parser.add_argument(
-        "-f", "--folder", help="Specifify which folders use.  Comma separated list."
+        "-f", "--folders", help="Specifify which folders use.  Comma separated list."
     )
     parser.add_argument(
         "-e", "--ssl", action="store_true", help="Use SSL.  Port defaults to 993."
@@ -107,6 +104,14 @@ def get_config():
         else:
             args.port = 993
 
+    if args.folders:
+        args.folders = [x.strip() for x in args.folders.split(",")]
+        if args.thunderbird:
+            args.folders = [
+                x.replace("Inbox", "INBOX", 1) if x.startswith("Inbox") else x
+                for x in args.folders
+            ]
+
     if not args.password:
         args.password = getpass.getpass()
 
@@ -128,6 +133,8 @@ def main():
             password=config.password,
             port=config.port,
             usessl=config.ssl,
+            thunderbird=config.thunderbird,
+            folders=config.folders,
         )
         imb.download_all_messages()
         imb.logout()

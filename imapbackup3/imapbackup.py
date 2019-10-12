@@ -312,7 +312,7 @@ class MailServerHandler:
         return hierarchy_delim
 
     def get_names(self, thunderbird=False, compress="none"):
-        """Get list of folders, returns [(FolderName,FileName)]"""
+        """Get list of folders, returns [(FolderName, FileName)]"""
 
         logger.info("Finding Folders ...")
 
@@ -409,6 +409,8 @@ class IMAPBackup:
         keyfilename=None,
         certfilename=None,
         timeout=None,
+        thunderbird=False,
+        folders=None,
     ):
         self.mailserver = MailServerHandler(
             host=host,
@@ -422,12 +424,14 @@ class IMAPBackup:
         )
         self.logged_in = False
         self._names = None
+        self.thunderbird = thunderbird
+        self.folders = folders
 
     def login(self):
         if not self.logged_in:
             self.mailserver.connect_and_login()
             self.logged_in = True
-    
+
     def logout(self):
         if self.logged_in:
             self.mailserver.server.logout()
@@ -452,7 +456,10 @@ class IMAPBackup:
 
     def _get_names(self):
         self.login()
-        return self.mailserver.get_names()
+        names = self.mailserver.get_names(thunderbird=self.thunderbird)
+        if self.folders is not None:
+            names = [n for n in names if n[0] in self.folders]
+        return names
 
     def download_folder_messages(self, foldername, filename):
         self.login()
