@@ -84,13 +84,19 @@ This package is based on a script by [Rui Carmo](https://github.com/rcarmo/imapb
 
 ## Features
 
+### Inherited from `imapbackup`
+
 * ZERO dependencies.
 * Copies every single message from every single folder (or a subset of folders) in your IMAP server to your disk.
 * Does _incremental_ copying (i.e., tries very hard to not copy messages twice).
 * Tries to do everything as safely as possible (only performs read operations on IMAP).
-* Generates `mbox` formatted files that can be imported into Mail.app (just choose "Other" on the import dialog).
-* Optionally compresses the result files on the fly (and can append to them).
 * Is completely and utterly free (distributed under the MIT license).
+
+### New features
+
+* Python 3 compatible
+* Supports mbox or Maildir formats
+* Can be imported and used as library
 
 ## Requirements
 
