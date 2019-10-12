@@ -85,6 +85,12 @@ def get_config():
         help="Prompts for password if not specified. If the first character is '@', treat the rest as a path to a file containing the password.  Leading '' makes it literal.",
     )
     parser.add_argument(
+        "-m",
+        "--mailbox",
+        default="mbox",
+        help="Local e-mail storage format. Possible values: mbox (default), Maildir",
+    )
+    parser.add_argument(
         "-t",
         "--timeout",
         metavar="SECS",
@@ -136,7 +142,7 @@ def main():
             thunderbird=config.thunderbird,
             folders=config.folders,
         ) as imb:
-            imb.download_all_messages()
+            imb.download_all_messages(fmt=config.mailbox)
     except KeyboardInterrupt:
         sys.exit(0)
     except (socket.error, imaplib.IMAP4.error) as err:

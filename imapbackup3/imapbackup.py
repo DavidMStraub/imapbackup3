@@ -373,7 +373,7 @@ class IMAPBackup:
         msg = email.message_from_string(text)
         if "message-id" not in msg:
             msg["message-id"] = (
-                "<" + UUID + "." + hashlib.sha1(header.encode()).hexdigest() + ">"
+                "<" + UUID + "." + hashlib.sha1(text.encode()).hexdigest() + ">"
             )
             text = msg.as_string()
 
@@ -397,10 +397,7 @@ class IMAPBackup:
         """Download messages from folder and append to mailbox"""
 
         if self.overwrite:
-            if os.path.exists(mbox._path):
-                logger.info("Deleting %s", mbox._path)
-                os.remove(mbox._path)
-            return []
+            mbox.clear()
 
         if not messages:
             logger.info("New messages: 0")
@@ -424,10 +421,9 @@ class IMAPBackup:
         mbox.flush()
         mbox.unlock()
 
-    def download_folder_messages(self, foldername, filename):
+    def download_folder_messages(self, mbox, foldername):
         self.login()
         fol_messages = self.mailserver.scan_folder(foldername)
-        mbox = mailbox.mbox(filename)
         fil_messages = {msg["message-id"]: num for num, msg in mbox.items()}
         new_messages = {}
         for msg_id in list(fol_messages.keys()):
@@ -436,11 +432,18 @@ class IMAPBackup:
 
         self.download_messages(mbox, foldername, new_messages)
 
-    def download_all_messages(self):
+
+    def download_all_messages(self, fmt='mbox'):
         for name_pair in self.names:
             try:
                 foldername, filename = name_pair
-                self.download_folder_messages(foldername, filename)
+                if fmt.lower() == 'mbox':
+                    mbox = mailbox.mbox(filename)
+                elif fmt.lower() == 'maildir':
+                    mbox = mailbox.Maildir(filename)
+                else:
+                    raise ValueError("Mailbox format {} not understood".format(fmt))
+                self.download_folder_messages(mbox, foldername)
 
             except SkipFolderException as err:
                 logger.error(err)
