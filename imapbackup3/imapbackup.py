@@ -8,13 +8,12 @@ import email
 import gc
 import hashlib
 import imaplib
+import logging
 import mailbox
 import os
 import re
 import socket
 import sys
-import logging
-
 
 logger = logging.getLogger("imapbackup3")
 
@@ -361,20 +360,21 @@ class IMAPBackup:
         folders = self.mailserver.get_folder_names()
         if self.folders is not None:
             folders = [f for f in folders if f in self.folders]
-                # Get hierarchy delimiter
+            # Get hierarchy delimiter
         delim = self.mailserver.get_hierarchy_delimiter()
         names = [(f, self.get_mbox_filename(f, delim)) for f in folders]
         return names
 
-
     def download_message(self, mbox, folder, num, total, biggest):
-    
+
         # fetch message
         text = self.mailserver.fetch_message(folder, num)
 
         msg = email.message_from_string(text)
-        if 'message-id' not in msg:
-            msg['message-id'] = "<" + UUID  + "." + hashlib.sha1(header.encode()).hexdigest()  + ">"
+        if "message-id" not in msg:
+            msg["message-id"] = (
+                "<" + UUID + "." + hashlib.sha1(header.encode()).hexdigest() + ">"
+            )
             text = msg.as_string()
 
         mbox.add(text.encode())
@@ -414,9 +414,13 @@ class IMAPBackup:
 
         # each new message
         for msg_id in messages:
-            total, biggest = self.download_message(
-                mbox, folder, messages[msg_id], total, biggest
-            )
+            try:
+                total, biggest = self.download_message(
+                    mbox, folder, messages[msg_id], total, biggest
+                )
+            except KeyboardInterrupt:
+                mbox.flush()
+                mbox.unlock()
         mbox.flush()
         mbox.unlock()
 
@@ -424,7 +428,7 @@ class IMAPBackup:
         self.login()
         fol_messages = self.mailserver.scan_folder(foldername)
         mbox = mailbox.mbox(filename)
-        fil_messages = {msg['message-id']: num for num, msg in mbox.items()}
+        fil_messages = {msg["message-id"]: num for num, msg in mbox.items()}
         new_messages = {}
         for msg_id in list(fol_messages.keys()):
             if msg_id not in fil_messages:
