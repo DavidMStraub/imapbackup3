@@ -127,7 +127,7 @@ def main():
     """Main entry point"""
     try:
         config = get_config()
-        imb = IMAPBackup(
+        with IMAPBackup(
             host=config.server,
             user=config.user,
             password=config.password,
@@ -135,9 +135,8 @@ def main():
             usessl=config.ssl,
             thunderbird=config.thunderbird,
             folders=config.folders,
-        )
-        imb.download_all_messages()
-        imb.logout()
+        ) as imb:
+            imb.download_all_messages()
     except KeyboardInterrupt:
         sys.exit(0)
     except (socket.error, imaplib.IMAP4.error) as err:

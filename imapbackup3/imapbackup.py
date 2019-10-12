@@ -427,6 +427,13 @@ class IMAPBackup:
         self.thunderbird = thunderbird
         self.folders = folders
 
+    def __enter__(self):
+        self.login()
+        return self
+
+    def __exit__(self, type, value, traceback):
+        self.logout()
+
     def login(self):
         if not self.logged_in:
             self.mailserver.connect_and_login()
