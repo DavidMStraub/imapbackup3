@@ -141,8 +141,9 @@ def main():
             usessl=config.ssl,
             thunderbird=config.thunderbird,
             folders=config.folders,
+            fmt=config.mailbox,
         ) as imb:
-            imb.download_all_messages(fmt=config.mailbox)
+            imb.download_all_messages()
     except KeyboardInterrupt:
         sys.exit(0)
     except (socket.error, imaplib.IMAP4.error) as err:

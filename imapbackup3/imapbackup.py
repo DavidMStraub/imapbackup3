@@ -46,7 +46,18 @@ BLANKS_RE = re.compile(r"\s+", re.MULTILINE)
 UUID = "19AF1258-1AAF-44EF-9D9A-731079D6FAD7"  # Used to generate Message-Ids
 
 
+def require_login(f):
+    """Decorator for methods that require login."""
+    def wrapper(instance, *args, **kwargs):
+        if not instance.logged_in:
+            instance.login()
+            instance.logged_in = True
+        return f(instance, *args, **kwargs)
+    return wrapper
+
+
 class MailServerHandler:
+    """Handle the connection to and reading from an IMAP server."""
     def __init__(
         self,
         host,
@@ -67,8 +78,17 @@ class MailServerHandler:
         self.certfilename = certfilename
         self.timeout = timeout
         self.server = None
+        self.logged_in = None
 
+    def logout(self):
+        if self.logged_in:
+            self.server.logout()
+
+    @require_login
     def fetch_message(self, folder, num):
+        """Fetch the message number `num` for the IMAP folder `folder`.
+        
+        Returns a string."""
         self.server.select(folder, readonly=True)
         typ, data = self.server.fetch(str(num), "RFC822")
         assert typ == "OK"
@@ -82,8 +102,10 @@ class MailServerHandler:
         text = text.strip().replace("\r", "")
         return text
 
-    def connect_and_login(self):
-        """Connects to the server and logs in.  Returns IMAP4 object."""
+    def login(self):
+        """Connects to the server and logs in.
+        
+        Returns IMAP4 object."""
         try:
             if self.timeout:
                 socket.setdefaulttimeout(self.timeout)
@@ -138,6 +160,7 @@ class MailServerHandler:
         self.server = server
         return server
 
+    @require_login
     def scan_folder(self, foldername):
         """Gets IDs of messages in the specified folder, returns id:num dict"""
         messages = {}
@@ -191,6 +214,7 @@ class MailServerHandler:
         logger.info("Found %d messages", len(messages))
         return messages
 
+    @require_login
     def get_hierarchy_delimiter(self):
         """Queries the imapd for the hierarchy delimiter, eg. '.' in INBOX.Sent"""
         # see RFC 3501 page 39 paragraph 4
@@ -204,6 +228,7 @@ class MailServerHandler:
             hierarchy_delim = "."
         return hierarchy_delim
 
+    @require_login
     def get_folder_names(self):
         """Get list of folders"""
 
@@ -293,6 +318,7 @@ class IMAPBackup:
         thunderbird=False,
         folders=None,
         overwrite=False,
+        fmt='mbox',
     ):
         self.mailserver = MailServerHandler(
             host=host,
@@ -304,37 +330,34 @@ class IMAPBackup:
             certfilename=certfilename,
             timeout=timeout,
         )
-        self.logged_in = False
         self._names = None
         self.thunderbird = thunderbird
         self.folders = folders
         self.overwrite = overwrite
+        self.fmt = fmt
 
     def __enter__(self):
-        self.login()
+        self.mailserver.login()
         return self
 
-    def __exit__(self, type, value, traceback):
-        self.logout()
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.mailserver.logout()
 
-    def login(self):
-        if not self.logged_in:
-            self.mailserver.connect_and_login()
-            self.logged_in = True
-
-    def logout(self):
-        if self.logged_in:
-            self.mailserver.server.logout()
-
-    def get_mbox_filename(self, imap_foldername, hierarchy_delimiter):
+    def get_mailbox_filename(self, imap_foldername, hierarchy_delimiter, fmt):
+        """Get the file (or directory) name of the mailbox file (or directory)."""
         delim = hierarchy_delimiter
         suffix = ""  # no compression
-        if self.thunderbird:
-            filename = ".sbd/".join(imap_foldername.split(delim)) + suffix
-            if filename.startswith("INBOX"):
-                filename = filename.replace("INBOX", "Inbox")
+        if self.fmt == 'mbox':
+            if self.thunderbird:
+                filename = ".sbd/".join(imap_foldername.split(delim)) + suffix
+                if filename.startswith("INBOX"):
+                    filename = filename.replace("INBOX", "Inbox")
+            else:
+                filename = ".".join(imap_foldername.split(delim)) + ".mbox" + suffix
+        elif self.fmt == 'maildir':
+            filename = ".".join(imap_foldername.split(delim))
         else:
-            filename = ".".join(imap_foldername.split(delim)) + ".mbox" + suffix
+            raise ValueError("Mailbox format {} not understood".format(fmt))
         return filename
 
     def create_folder_structure(self):
@@ -351,21 +374,25 @@ class IMAPBackup:
 
     @property
     def names(self):
+        """Return a (cached) list of IMAP folder name and file/directory name tuples."""
         if not self._names:
             self._names = self._get_names()
         return self._names
 
     def _get_names(self):
-        self.login()
+        """Return a list of IMAP folder name and file/directory name tuples."""
         folders = self.mailserver.get_folder_names()
         if self.folders is not None:
             folders = [f for f in folders if f in self.folders]
             # Get hierarchy delimiter
         delim = self.mailserver.get_hierarchy_delimiter()
-        names = [(f, self.get_mbox_filename(f, delim)) for f in folders]
+        names = [(f, self.get_mailbox_filename(f, delim, self.fmt)) for f in folders]
         return names
 
-    def download_message(self, mbox, folder, num, total, biggest):
+    def download_message(self, mbox, folder, num):
+        """Download message no. `num` from the IMAP `folder` to the Mailbox instance `mbox`.
+        
+        Returns the size of the message."""
 
         # fetch message
         text = self.mailserver.fetch_message(folder, num)
@@ -380,18 +407,10 @@ class IMAPBackup:
         mbox.add(text.encode())
 
         size = len(text)
-        biggest = max(size, biggest)
-        total += size
 
         gc.collect()
 
-        logger.info(
-            "%s total, %s for largest message",
-            pretty_byte_count(total),
-            pretty_byte_count(biggest),
-        )
-
-        return total, biggest
+        return size
 
     def download_messages(self, mbox, folder, messages):
         """Download messages from folder and append to mailbox"""
@@ -412,9 +431,18 @@ class IMAPBackup:
         # each new message
         for msg_id in messages:
             try:
-                total, biggest = self.download_message(
-                    mbox, folder, messages[msg_id], total, biggest
+                size = self.download_message(
+                    mbox, folder, messages[msg_id]
                 )
+                biggest = max(size, biggest)
+                total += size
+
+                logger.info(
+                    "%s total, %s for largest message",
+                    pretty_byte_count(total),
+                    pretty_byte_count(biggest),
+                )
+
             except KeyboardInterrupt:
                 mbox.flush()
                 mbox.unlock()
@@ -422,7 +450,8 @@ class IMAPBackup:
         mbox.unlock()
 
     def download_folder_messages(self, mbox, foldername):
-        self.login()
+        """Download all messages from the IMAP folder with `foldername` to the
+        Mailbox instance `mbox`."""
         fol_messages = self.mailserver.scan_folder(foldername)
         fil_messages = {msg["message-id"]: num for num, msg in mbox.items()}
         new_messages = {}
@@ -433,13 +462,14 @@ class IMAPBackup:
         self.download_messages(mbox, foldername, new_messages)
 
 
-    def download_all_messages(self, fmt='mbox'):
+    def download_all_messages(self):
+        """Download all messages to a new mailbox with format `fmt`."""
         for name_pair in self.names:
             try:
                 foldername, filename = name_pair
-                if fmt.lower() == 'mbox':
+                if self.fmt == 'mbox':
                     mbox = mailbox.mbox(filename)
-                elif fmt.lower() == 'maildir':
+                elif self.fmt == 'maildir':
                     mbox = mailbox.Maildir(filename)
                 else:
                     raise ValueError("Mailbox format {} not understood".format(fmt))
