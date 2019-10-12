@@ -13,7 +13,8 @@ python3 -m pip install --user imapbackup3
 
 ```
 usage: imapbackup3 [-h] [-y] [-f FOLDERS] [-e] [-k KEY] [-c CERT] -s HOST
-                   [-P PORT] -u USER [-p PASSWORD] [-t SECS] [--thunderbird]
+                   [-P PORT] -u USER [-p PASSWORD] [-m MAILBOX] [-t SECS]
+                   [--thunderbird]
 
 Back up E-mail messages from an IMAP server. mbox files are created in the
 current working directory.
@@ -36,6 +37,9 @@ optional arguments:
                         Prompts for password if not specified. If the first
                         character is '@', treat the rest as a path to a file
                         containing the password. Leading '' makes it literal.
+  -m MAILBOX, --mailbox MAILBOX
+                        Local e-mail storage format. Possible values: mbox
+                        (default), Maildir
   -t SECS, --timeout SECS
                         Sets socket timeout to SECS seconds.
   --thunderbird         Create Mozilla Thunderbird compatible mailbox
@@ -64,7 +68,8 @@ with IMAPBackup(
     keyfilename='my_key.pem',
     certfilename='my_cert.pem',
     thunderbird=False,
-    folders=['INBOX', 'INBOX.Sent']
+    folders=['INBOX', 'INBOX.Sent'],
+    fmt='Maildir',
 ) as imb:
     imb.download_all_messages()
 ```
