@@ -97,6 +97,7 @@ This package is based on a script by [Rui Carmo](https://github.com/rcarmo/imapb
 * Python 3 compatible
 * Supports mbox or Maildir formats
 * Can be imported and used as library
+* When used as a library, messages can be filtered or modified on the fly
 
 ## Requirements
 
