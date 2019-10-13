@@ -100,6 +100,6 @@ This package is based on a script by [Rui Carmo](https://github.com/rcarmo/imapb
 
 ## Requirements
 
-This package requires Python 3.
+This package requires Python 3.6.
 
 [tao]: http://taoofmac.com/space/projects/imapbackup
