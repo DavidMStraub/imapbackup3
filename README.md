@@ -74,6 +74,24 @@ with IMAPBackup(
     imb.download_all_messages()
 ```
 
+### Usage of the message filter
+
+A function `msg_filter` can be passed to the `download_all_messages` method
+that takes an `email.message.EmailMessage` instance as input and either
+returns the same instance again (which will not change anything), returns
+`None` (which will filter out the message) or returns a modified instance
+(which will store the modified message). (Stupid) example:
+
+```python
+def my_filter(msg):
+    if 'SPAM' in msg['subject']:
+        return None
+    msg['subject'] += ' (no Spam)'
+    return msg
+
+imb.download_all_messages(msg_filter=my_filter)
+```
+
 ## Background
 
 This package is based on a script by [Rui Carmo](https://github.com/rcarmo/imapbackup). Original description: 
