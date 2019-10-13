@@ -5,6 +5,7 @@
 
 
 import email
+import email.policy
 import gc
 import hashlib
 import imaplib
@@ -48,16 +49,19 @@ UUID = "19AF1258-1AAF-44EF-9D9A-731079D6FAD7"  # Used to generate Message-Ids
 
 def require_login(f):
     """Decorator for methods that require login."""
+
     def wrapper(instance, *args, **kwargs):
         if not instance.logged_in:
             instance.login()
             instance.logged_in = True
         return f(instance, *args, **kwargs)
+
     return wrapper
 
 
 class MailServerHandler:
     """Handle the connection to and reading from an IMAP server."""
+
     def __init__(
         self,
         host,
@@ -318,7 +322,7 @@ class IMAPBackup:
         thunderbird=False,
         folders=None,
         overwrite=False,
-        fmt='mbox',
+        fmt="mbox",
     ):
         self.mailserver = MailServerHandler(
             host=host,
@@ -347,14 +351,14 @@ class IMAPBackup:
         """Get the file (or directory) name of the mailbox file (or directory)."""
         delim = hierarchy_delimiter
         suffix = ""  # no compression
-        if self.fmt == 'mbox':
+        if self.fmt == "mbox":
             if self.thunderbird:
                 filename = ".sbd/".join(imap_foldername.split(delim)) + suffix
                 if filename.startswith("INBOX"):
                     filename = filename.replace("INBOX", "Inbox")
             else:
                 filename = ".".join(imap_foldername.split(delim)) + ".mbox" + suffix
-        elif self.fmt == 'maildir':
+        elif self.fmt == "maildir":
             filename = ".".join(imap_foldername.split(delim))
         else:
             raise ValueError("Mailbox format {} not understood".format(fmt))
@@ -389,7 +393,7 @@ class IMAPBackup:
         names = [(f, self.get_mailbox_filename(f, delim, self.fmt)) for f in folders]
         return names
 
-    def download_message(self, mbox, folder, num):
+    def download_message(self, mbox, folder, num, msg_filter=None):
         """Download message no. `num` from the IMAP `folder` to the Mailbox instance `mbox`.
         
         Returns the size of the message."""
@@ -397,22 +401,31 @@ class IMAPBackup:
         # fetch message
         text = self.mailserver.fetch_message(folder, num)
 
-        msg = email.message_from_string(text)
+        msg = email.message_from_string(text, policy=email.policy.default)
         if "message-id" not in msg:
             msg["message-id"] = (
                 "<" + UUID + "." + hashlib.sha1(text.encode()).hexdigest() + ">"
             )
             text = msg.as_string()
 
+        if msg_filter is not None:
+            msg = msg_filter(msg)
+            if msg is None:
+                # if there is a message filter and the msg is filtered out, return
+                logger.info("Skipping filtered message")
+                return None
+            # the filter modified the message
+            text = msg.as_string()
+
         mbox.add(text.encode())
 
-        size = len(text)
+        size = sys.getsizeof(text)
 
         gc.collect()
 
         return size
 
-    def download_messages(self, mbox, folder, messages):
+    def download_messages(self, mbox, folder, messages, msg_filter=None):
         """Download messages from folder and append to mailbox"""
 
         if self.overwrite:
@@ -432,8 +445,12 @@ class IMAPBackup:
         for msg_id in messages:
             try:
                 size = self.download_message(
-                    mbox, folder, messages[msg_id]
+                    mbox, folder, messages[msg_id], msg_filter=msg_filter
                 )
+
+                if size is None:  # msg filtered out
+                    continue
+
                 biggest = max(size, biggest)
                 total += size
 
@@ -449,7 +466,7 @@ class IMAPBackup:
         mbox.flush()
         mbox.unlock()
 
-    def download_folder_messages(self, mbox, foldername):
+    def download_folder_messages(self, mbox, foldername, msg_filter=None):
         """Download all messages from the IMAP folder with `foldername` to the
         Mailbox instance `mbox`."""
         fol_messages = self.mailserver.scan_folder(foldername)
@@ -459,21 +476,25 @@ class IMAPBackup:
             if msg_id not in fil_messages:
                 new_messages[msg_id] = fol_messages[msg_id]
 
-        self.download_messages(mbox, foldername, new_messages)
+        self.download_messages(mbox, foldername, new_messages, msg_filter=msg_filter)
 
-
-    def download_all_messages(self):
+    def download_all_messages(self, msg_filter=None):
         """Download all messages to a new mailbox with format `fmt`."""
         for name_pair in self.names:
             try:
                 foldername, filename = name_pair
-                if self.fmt == 'mbox':
-                    mbox = mailbox.mbox(filename)
-                elif self.fmt == 'maildir':
-                    mbox = mailbox.Maildir(filename)
+                if self.fmt == "mbox":
+                    mbox = mailbox.mbox(filename, factory=email_message_factory)
+                elif self.fmt == "maildir":
+                    mbox = mailbox.Maildir(filename, factory=email_message_factory)
                 else:
                     raise ValueError("Mailbox format {} not understood".format(fmt))
-                self.download_folder_messages(mbox, foldername)
+                self.download_folder_messages(mbox, foldername, msg_filter=msg_filter)
 
             except SkipFolderException as err:
                 logger.error(err)
+
+
+def email_message_factory(f):
+    """Factory to create EmailMessage objects instead of Message objects"""
+    return email.message_from_binary_file(f, policy=email.policy.default)
