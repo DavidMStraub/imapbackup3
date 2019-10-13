@@ -7,7 +7,7 @@ with open("README.md") as f:
 
 setup(
     name="imapbackup3",
-    version="0.1",
+    version="0.2",
     author="David M. Straub <straub@pm.me>",
     author_email="straub@pm.me",
     url="https://github.com/DavidMStraub/imapbackup3",
