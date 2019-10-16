@@ -93,7 +93,7 @@ class MailServerHandler:
         """Fetch the message number `num` for the IMAP folder `folder`.
         
         Returns a string."""
-        self.server.select(folder, readonly=True)
+        self.server.select('"{}"'.format(folder), readonly=True)
         typ, data = self.server.fetch(str(num), "RFC822")
         assert typ == "OK"
         for encoding in ["utf-8", "latin1"]:
@@ -170,7 +170,7 @@ class MailServerHandler:
         messages = {}
         logger.info("Folder %s ...", foldername)
         try:
-            typ, data = self.server.select(foldername, readonly=True)
+            typ, data = self.server.select('"{}"'.format(foldername), readonly=True)
             if typ != "OK":
                 raise SkipFolderException("SELECT failed: %s" % (data))
             num_msgs = int(data[0])
@@ -181,9 +181,8 @@ class MailServerHandler:
                 typ, data = self.server.fetch(
                     str(num), "(BODY.PEEK[HEADER.FIELDS (MESSAGE-ID)])"
                 )
-                if typ != "OK":
+                if typ != "OK" or not data[0] or not data[0][1]:
                     raise SkipFolderException("FETCH {} failed: {}".format(num, data))
-
                 header = data[0][1].strip()
                 # remove newlines inside Message-Id (a dumb Exchange trait)
                 header = BLANKS_RE.sub(" ", header.decode())
@@ -359,7 +358,8 @@ class IMAPBackup:
             else:
                 filename = ".".join(imap_foldername.split(delim)) + ".mbox" + suffix
         elif self.fmt == "maildir":
-            filename = ".".join(imap_foldername.split(delim))
+            # no extension, with leading dot
+            filename = "." + ".".join(imap_foldername.split(delim))
         else:
             raise ValueError("Mailbox format {} not understood".format(fmt))
         return filename
@@ -393,7 +393,7 @@ class IMAPBackup:
         names = [(f, self.get_mailbox_filename(f, delim, self.fmt)) for f in folders]
         return names
 
-    def download_message(self, mbox, folder, num, msg_filter=None):
+    def download_message(self, mbox, folder, num, msg_filter=None, msg_id=None):
         """Download message no. `num` from the IMAP `folder` to the Mailbox instance `mbox`.
         
         Returns the size of the message."""
@@ -402,10 +402,8 @@ class IMAPBackup:
         text = self.mailserver.fetch_message(folder, num)
 
         msg = email.message_from_string(text, policy=email.policy.default)
-        if "message-id" not in msg:
-            msg["message-id"] = (
-                "<" + UUID + "." + hashlib.sha1(text.encode()).hexdigest() + ">"
-            )
+        if "message-id" not in msg and msg_id is not None:
+            msg["message-id"] = msg_id
             text = msg.as_string()
 
         if msg_filter is not None:
@@ -445,7 +443,7 @@ class IMAPBackup:
         for msg_id in messages:
             try:
                 size = self.download_message(
-                    mbox, folder, messages[msg_id], msg_filter=msg_filter
+                    mbox, folder, messages[msg_id], msg_filter=msg_filter, msg_id=msg_id
                 )
 
                 if size is None:  # msg filtered out
@@ -470,9 +468,9 @@ class IMAPBackup:
         """Download all messages from the IMAP folder with `foldername` to the
         Mailbox instance `mbox`."""
         fol_messages = self.mailserver.scan_folder(foldername)
-        fil_messages = {msg["message-id"]: num for num, msg in mbox.items()}
+        fil_messages = {msg["message-id"].strip(): num for num, msg in mbox.items()}
         new_messages = {}
-        for msg_id in list(fol_messages.keys()):
+        for msg_id in fol_messages:
             if msg_id not in fil_messages:
                 new_messages[msg_id] = fol_messages[msg_id]
 
