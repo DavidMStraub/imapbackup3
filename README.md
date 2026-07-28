@@ -1,6 +1,10 @@
 imapbackup3
 ===========
 
+[![CI](https://github.com/DavidMStraub/imapbackup3/actions/workflows/ci.yml/badge.svg)](https://github.com/DavidMStraub/imapbackup3/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/imapbackup3.svg)](https://pypi.org/project/imapbackup3/)
+[![Python versions](https://img.shields.io/pypi/pyversions/imapbackup3.svg)](https://pypi.org/project/imapbackup3/)
+
 A Python package for creating full backups of IMAP mailboxes
 
 ## Installation
@@ -19,29 +23,28 @@ usage: imapbackup3 [-h] [-y] [-f FOLDERS] [-e] [-k KEY] [-c CERT] -s HOST
 Back up E-mail messages from an IMAP server. mbox files are created in the
 current working directory.
 
-optional arguments:
+options:
   -h, --help            show this help message and exit
   -y, --yes-overwrite-mboxes
                         Overwite existing mbox files instead of appending
-  -f FOLDERS, --folders FOLDERS
+  -f, --folders FOLDERS
                         Specifify which folders use. Comma separated list.
   -e, --ssl             Use SSL. Port defaults to 993.
-  -k KEY, --key KEY     PEM private key file for SSL. Specify cert, too.
-  -c CERT, --cert CERT  PEM certificate chain for SSL. Specify key, too.
-                        Python's SSL module doesn't check the cert chain.
-  -s HOST, --server HOST
-                        Address of server (without port)
-  -P PORT, --port PORT  Server port (defaults to 143 without and 993 with SSL)
-  -u USER, --user USER  Username to log into server
-  -p PASSWORD, --password PASSWORD
+  -k, --key KEY         Path to PEM private key file for SSL. Specify cert,
+                        too.
+  -c, --cert CERT       Path to PEM certificate chain for SSL. Specify key,
+                        too. Python's SSL module doesn't check the cert chain.
+  -s, --server HOST     Address of server (without port)
+  -P, --port PORT       Server port (defaults to 143 without and 993 with SSL)
+  -u, --user USER       Username to log into server
+  -p, --password PASSWORD
                         Prompts for password if not specified. If the first
                         character is '@', treat the rest as a path to a file
                         containing the password. Leading '' makes it literal.
-  -m MAILBOX, --mailbox MAILBOX
+  -m, --mailbox MAILBOX
                         Local e-mail storage format. Possible values: mbox
                         (default), Maildir
-  -t SECS, --timeout SECS
-                        Sets socket timeout to SECS seconds.
+  -t, --timeout SECS    Sets socket timeout to SECS seconds.
   --thunderbird         Create Mozilla Thunderbird compatible mailbox
 ```
 
@@ -51,7 +54,8 @@ Minimal example (using SSL on port 993):
 
 ```python
 from imapbackup3 import IMAPBackup
-with IMAPBackup(host='mail.example.com', user='myuser', password='mypassword') as imb:
+
+with IMAPBackup(host="mail.example.com", user="myuser", password="mypassword") as imb:
     imb.download_all_messages()
 ```
 
@@ -59,17 +63,18 @@ Full example:
 
 ```python
 from imapbackup3 import IMAPBackup
+
 with IMAPBackup(
-    host='mail.example.com',
-    user='myuser',
-    password='mypassword',
+    host="mail.example.com",
+    user="myuser",
+    password="mypassword",
     port=993,
     usessl=True,
-    keyfilename='my_key.pem',
-    certfilename='my_cert.pem',
+    keyfilename="my_key.pem",
+    certfilename="my_cert.pem",
     thunderbird=False,
-    folders=['INBOX', 'INBOX.Sent'],
-    fmt='Maildir',
+    folders=["INBOX", "INBOX.Sent"],
+    fmt="Maildir",
 ) as imb:
     imb.download_all_messages()
 ```
@@ -84,10 +89,11 @@ returns the same instance again (which will not change anything), returns
 
 ```python
 def my_filter(msg):
-    if 'SPAM' in msg['subject']:
+    if "SPAM" in msg["subject"]:
         return None
-    msg['subject'] += ' (no Spam)'
+    msg["subject"] += " (no Spam)"
     return msg
+
 
 imb.download_all_messages(msg_filter=my_filter)
 ```
@@ -112,13 +118,31 @@ This package is based on a script by [Rui Carmo](https://github.com/rcarmo/imapb
 
 ### New features
 
-* Python 3 compatible
+* Python 3 compatible, fully type-hinted
 * Supports mbox or Maildir formats
 * Can be imported and used as library
 * When used as a library, messages can be filtered or modified on the fly
 
 ## Requirements
 
-This package requires Python 3.6.
+This package requires Python 3.10 or newer.
+
+## Development
+
+Clone the repository and install it in editable mode with the development
+extras:
+
+```
+python3 -m pip install -e ".[dev]"
+```
+
+Run the test suite, linter, formatter and type checker:
+
+```
+pytest
+ruff check .
+ruff format .
+mypy
+```
 
 [tao]: http://taoofmac.com/space/projects/imapbackup

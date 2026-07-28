@@ -3,8 +3,10 @@
 # Forked from https://github.com/rcarmo/imapbackup
 # Original code (C) 2006-2018 Rui Carmo. Code under MIT License.(C)
 
+from __future__ import annotations
 
 import email
+import email.message
 import email.policy
 import gc
 import hashlib
@@ -15,20 +17,24 @@ import os
 import re
 import socket
 import sys
+from collections.abc import Callable
+from typing import IO, Any
 
 logger = logging.getLogger("imapbackup3")
+
+MsgFilter = Callable[[email.message.EmailMessage], "email.message.EmailMessage | None"]
 
 
 class SkipFolderException(Exception):
     """Indicates aborting processing of current folder, continue with next folder."""
 
 
-def pretty_byte_count(num):
+def pretty_byte_count(num: int) -> str:
     """Converts integer into a human friendly count of bytes, eg: 12.243 MB"""
     if num == 1:
         return "1 byte"
     elif num < 1024:
-        return "%s bytes" % (num)
+        return f"{num} bytes"
     elif num < 1048576:
         return "%.2f KB" % (num / 1024.0)
     elif num < 1073741824:
@@ -47,10 +53,16 @@ BLANKS_RE = re.compile(r"\s+", re.MULTILINE)
 UUID = "19AF1258-1AAF-44EF-9D9A-731079D6FAD7"  # Used to generate Message-Ids
 
 
-def require_login(f):
+def _fetch_payload(item: bytes | tuple[bytes, bytes] | None) -> bytes:
+    """Extract the message payload from one element of an IMAP FETCH response."""
+    assert isinstance(item, tuple)
+    return item[1]
+
+
+def require_login(f: Callable[..., Any]) -> Callable[..., Any]:
     """Decorator for methods that require login."""
 
-    def wrapper(instance, *args, **kwargs):
+    def wrapper(instance: MailServerHandler, *args: Any, **kwargs: Any) -> Any:
         if not instance.logged_in:
             instance.login()
             instance.logged_in = True
@@ -64,15 +76,15 @@ class MailServerHandler:
 
     def __init__(
         self,
-        host,
-        user,
-        password,
-        port=993,
-        usessl=True,
-        keyfilename=None,
-        certfilename=None,
-        timeout=None,
-    ):
+        host: str,
+        user: str,
+        password: str,
+        port: int = 993,
+        usessl: bool = True,
+        keyfilename: str | None = None,
+        certfilename: str | None = None,
+        timeout: int | None = None,
+    ) -> None:
         self.host = host
         self.user = user
         self.password = password
@@ -81,34 +93,37 @@ class MailServerHandler:
         self.keyfilename = keyfilename
         self.certfilename = certfilename
         self.timeout = timeout
-        self.server = None
-        self.logged_in = None
+        self.server: imaplib.IMAP4 | None = None
+        self.logged_in: bool = False
 
-    def logout(self):
-        if self.logged_in:
+    def logout(self) -> None:
+        if self.logged_in and self.server is not None:
             self.server.logout()
 
     @require_login
-    def fetch_message(self, folder, num):
+    def fetch_message(self, folder: str, num: int) -> str:
         """Fetch the message number `num` for the IMAP folder `folder`.
-        
+
         Returns a string."""
-        self.server.select('"{}"'.format(folder), readonly=True)
+        assert self.server is not None
+        self.server.select(f'"{folder}"', readonly=True)
         typ, data = self.server.fetch(str(num), "RFC822")
         assert typ == "OK"
+        raw = _fetch_payload(data[0])
+        text: str | None = None
         for encoding in ["utf-8", "latin1"]:
             try:
-                text = data[0][1].decode(encoding)
+                text = raw.decode(encoding)
             except UnicodeDecodeError:
                 text = None
         if text is None:
-            text = data[0][1].decode("utf-8", "backslashreplace")
+            text = raw.decode("utf-8", "backslashreplace")
         text = text.strip().replace("\r", "")
         return text
 
-    def login(self):
+    def login(self) -> imaplib.IMAP4:
         """Connects to the server and logs in.
-        
+
         Returns IMAP4 object."""
         try:
             if self.timeout:
@@ -121,13 +136,11 @@ class MailServerHandler:
                     self.keyfilename,
                     self.certfilename,
                 )
-                server = imaplib.IMAP4_SSL(
+                server: imaplib.IMAP4 = imaplib.IMAP4_SSL(
                     self.host, self.port, self.keyfilename, self.certfilename
                 )
             elif self.usessl:
-                logger.info(
-                    "Connecting to '%s' TCP port %d, SSL" % (self.host, self.port)
-                )
+                logger.info("Connecting to '%s' TCP port %d, SSL", self.host, self.port)
                 server = imaplib.IMAP4_SSL(self.host, self.port)
             else:
                 logger.info("Connecting to '%s' TCP port %d", self.host, self.port)
@@ -139,17 +152,18 @@ class MailServerHandler:
             logger.info("Logging in as '%s'", (self.user))
             server.login(self.user, self.password)
         except socket.gaierror as err:
-            (err, desc) = err
+            (err_no, desc) = err.args
             logger.info(
-                "ERROR: problem looking up server '%s' (%s %s)", self.host, err, desc
+                "ERROR: problem looking up server '%s' (%s %s)",
+                self.host,
+                err_no,
+                desc,
             )
             sys.exit(3)
-        except socket.error as err:
+        except OSError as err:
             if str(err) == "SSL_CTX_use_PrivateKey_file error":
                 logger.info(
-                    "ERROR: error reading private key file '{}'".format(
-                        self.keyfilename
-                    )
+                    f"ERROR: error reading private key file '{self.keyfilename}'"
                 )
             elif str(err) == "SSL_CTX_use_certificate_chain_file error":
                 logger.info(
@@ -165,49 +179,53 @@ class MailServerHandler:
         return server
 
     @require_login
-    def scan_folder(self, foldername):
+    def scan_folder(self, foldername: str) -> dict[str, int]:
         """Gets IDs of messages in the specified folder, returns id:num dict"""
-        messages = {}
+        assert self.server is not None
+        messages: dict[str, int] = {}
         logger.info("Folder %s ...", foldername)
         try:
-            typ, data = self.server.select('"{}"'.format(foldername), readonly=True)
+            typ, list_data = self.server.select(f'"{foldername}"', readonly=True)
             if typ != "OK":
-                raise SkipFolderException("SELECT failed: %s" % (data))
-            num_msgs = int(data[0])
+                raise SkipFolderException(f"SELECT failed: {list_data}")
+            num_msgs_raw = list_data[0]
+            assert num_msgs_raw is not None
+            num_msgs = int(num_msgs_raw)
 
             # each message
             for num in range(1, num_msgs + 1):
                 # Retrieve Message-Id, making sure we don't mark all messages as read
-                typ, data = self.server.fetch(
+                typ, fetch_data = self.server.fetch(
                     str(num), "(BODY.PEEK[HEADER.FIELDS (MESSAGE-ID)])"
                 )
-                if typ != "OK" or not data[0] or not data[0][1]:
-                    raise SkipFolderException("FETCH {} failed: {}".format(num, data))
-                header = data[0][1].strip()
+                if typ != "OK" or not fetch_data[0]:
+                    raise SkipFolderException(f"FETCH {num} failed: {fetch_data}")
+                header = _fetch_payload(fetch_data[0]).strip()
                 # remove newlines inside Message-Id (a dumb Exchange trait)
-                header = BLANKS_RE.sub(" ", header.decode())
+                header_str = BLANKS_RE.sub(" ", header.decode())
+                match = MSGID_RE.match(header_str)
                 try:
-                    msg_id = MSGID_RE.match(header).group(1)
+                    msg_id = match.group(1)  # type: ignore[union-attr]
                     if msg_id not in list(messages.keys()):
                         # avoid adding dupes
                         messages[msg_id] = num
                 except (IndexError, AttributeError):
                     # Some messages may have no Message-Id, so we'll synthesise one
                     # (this usually happens with Sent, Drafts and .Mac news)
-                    typ, data = self.server.fetch(
+                    typ, fetch_data = self.server.fetch(
                         str(num), "(BODY[HEADER.FIELDS (FROM TO CC DATE SUBJECT)])"
                     )
                     if typ != "OK":
                         raise SkipFolderException(
-                            "FETCH {} failed: {}".format(num, data)
-                        )
-                    header = data[0][1].decode().strip()
-                    header = header.replace("\r\n", "\t")
+                            f"FETCH {num} failed: {fetch_data}"
+                        ) from None
+                    header_str = _fetch_payload(fetch_data[0]).decode().strip()
+                    header_str = header_str.replace("\r\n", "\t")
                     messages[
                         "<"
                         + UUID
                         + "."
-                        + hashlib.sha1(header.encode()).hexdigest()
+                        + hashlib.sha1(header_str.encode()).hexdigest()
                         + ">"
                     ] = num
         finally:
@@ -218,9 +236,10 @@ class MailServerHandler:
         return messages
 
     @require_login
-    def get_hierarchy_delimiter(self):
+    def get_hierarchy_delimiter(self) -> str:
         """Queries the imapd for the hierarchy delimiter, eg. '.' in INBOX.Sent"""
         # see RFC 3501 page 39 paragraph 4
+        assert self.server is not None
         typ, data = self.server.list()
         assert typ == "OK"
         # assert len(data) == 1
@@ -232,8 +251,9 @@ class MailServerHandler:
         return hierarchy_delim
 
     @require_login
-    def get_folder_names(self):
+    def get_folder_names(self) -> list[str]:
         """Get list of folders"""
+        assert self.server is not None
 
         logger.info("Finding Folders ...")
 
@@ -255,13 +275,13 @@ class MailServerHandler:
         return names
 
 
-def parse_paren_list(row):
+def parse_paren_list(row: str) -> tuple[list[Any], str]:
     """Parses the nested list of attributes at the start of a LIST response"""
     # eat starting paren
     assert row[0] == "("
     row = row[1:]
 
-    result = []
+    result: list[Any] = []
 
     # NOTE: RFC3501 doesn't fully define the format of name attributes
     name_attrib_re = re.compile(r"^\s*(\\[a-zA-Z0-9_]+)\s*")
@@ -290,17 +310,18 @@ def parse_paren_list(row):
     return result, row
 
 
-def parse_string_list(row):
+def parse_string_list(row: str) -> list[str]:
     """Parses the quoted and unquoted strings at the end of a LIST response"""
     slist = re.compile(r'\s*(?:"([^"]+)")\s*|\s*(\S+)\s*').split(row)
     return [s for s in slist if s]
 
 
-def parse_list(row):
+def parse_list(row: bytes | tuple[bytes, bytes] | None) -> list[Any]:
     """Prases response of LIST command into a list"""
-    row = row.strip().decode()
-    paren_list, row = parse_paren_list(row)
-    string_list = parse_string_list(row)
+    assert isinstance(row, bytes)
+    row_str = row.strip().decode()
+    paren_list, row_str = parse_paren_list(row_str)
+    string_list = parse_string_list(row_str)
     assert len(string_list) == 2
     return [paren_list] + string_list
 
@@ -310,19 +331,19 @@ class IMAPBackup:
 
     def __init__(
         self,
-        host,
-        user,
-        password,
-        port=993,
-        usessl=True,
-        keyfilename=None,
-        certfilename=None,
-        timeout=None,
-        thunderbird=False,
-        folders=None,
-        overwrite=False,
-        fmt="mbox",
-    ):
+        host: str,
+        user: str,
+        password: str,
+        port: int = 993,
+        usessl: bool = True,
+        keyfilename: str | None = None,
+        certfilename: str | None = None,
+        timeout: int | None = None,
+        thunderbird: bool = False,
+        folders: list[str] | None = None,
+        overwrite: bool = False,
+        fmt: str = "mbox",
+    ) -> None:
         self.mailserver = MailServerHandler(
             host=host,
             user=user,
@@ -333,20 +354,22 @@ class IMAPBackup:
             certfilename=certfilename,
             timeout=timeout,
         )
-        self._names = None
+        self._names: list[tuple[str, str]] | None = None
         self.thunderbird = thunderbird
         self.folders = folders
         self.overwrite = overwrite
         self.fmt = fmt
 
-    def __enter__(self):
+    def __enter__(self) -> IMAPBackup:
         self.mailserver.login()
         return self
 
-    def __exit__(self, exc_type, exc_value, traceback):
+    def __exit__(self, exc_type: Any, exc_value: Any, traceback: Any) -> None:
         self.mailserver.logout()
 
-    def get_mailbox_filename(self, imap_foldername, hierarchy_delimiter, fmt):
+    def get_mailbox_filename(
+        self, imap_foldername: str, hierarchy_delimiter: str, fmt: str
+    ) -> str:
         """Get the file (or directory) name of the mailbox file (or directory)."""
         delim = hierarchy_delimiter
         suffix = ""  # no compression
@@ -361,12 +384,12 @@ class IMAPBackup:
             # no extension, with leading dot
             filename = "." + ".".join(imap_foldername.split(delim))
         else:
-            raise ValueError("Mailbox format {} not understood".format(fmt))
+            raise ValueError(f"Mailbox format {fmt} not understood")
         return filename
 
-    def create_folder_structure(self):
-        """ Create the folder structure on disk """
-        for imap_foldername, filename in sorted(self.names):
+    def create_folder_structure(self) -> None:
+        """Create the folder structure on disk"""
+        for _imap_foldername, filename in sorted(self.names):
             disk_foldername = os.path.split(filename)[0]
             if disk_foldername:
                 try:
@@ -377,13 +400,13 @@ class IMAPBackup:
                         raise
 
     @property
-    def names(self):
+    def names(self) -> list[tuple[str, str]]:
         """Return a (cached) list of IMAP folder name and file/directory name tuples."""
         if not self._names:
             self._names = self._get_names()
         return self._names
 
-    def _get_names(self):
+    def _get_names(self) -> list[tuple[str, str]]:
         """Return a list of IMAP folder name and file/directory name tuples."""
         folders = self.mailserver.get_folder_names()
         if self.folders is not None:
@@ -393,9 +416,17 @@ class IMAPBackup:
         names = [(f, self.get_mailbox_filename(f, delim, self.fmt)) for f in folders]
         return names
 
-    def download_message(self, mbox, folder, num, msg_filter=None, msg_id=None):
-        """Download message no. `num` from the IMAP `folder` to the Mailbox instance `mbox`.
-        
+    def download_message(
+        self,
+        mbox: mailbox.Mailbox,
+        folder: str,
+        num: int,
+        msg_filter: MsgFilter | None = None,
+        msg_id: str | None = None,
+    ) -> int | None:
+        """Download message no. `num` from the IMAP `folder` to the Mailbox
+        instance `mbox`.
+
         Returns the size of the message."""
 
         # fetch message
@@ -407,13 +438,13 @@ class IMAPBackup:
             text = msg.as_string()
 
         if msg_filter is not None:
-            msg = msg_filter(msg)
-            if msg is None:
+            filtered_msg = msg_filter(msg)
+            if filtered_msg is None:
                 # if there is a message filter and the msg is filtered out, return
                 logger.info("Skipping filtered message")
                 return None
             # the filter modified the message
-            text = msg.as_string()
+            text = filtered_msg.as_string()
 
         mbox.add(text.encode())
 
@@ -423,7 +454,13 @@ class IMAPBackup:
 
         return size
 
-    def download_messages(self, mbox, folder, messages, msg_filter=None):
+    def download_messages(
+        self,
+        mbox: mailbox.Mailbox,
+        folder: str,
+        messages: dict[str, int],
+        msg_filter: MsgFilter | None = None,
+    ) -> None:
         """Download messages from folder and append to mailbox"""
 
         if self.overwrite:
@@ -443,7 +480,11 @@ class IMAPBackup:
         for msg_id in messages:
             try:
                 size = self.download_message(
-                    mbox, folder, messages[msg_id], msg_filter=msg_filter, msg_id=msg_id
+                    mbox,
+                    folder,
+                    messages[msg_id],
+                    msg_filter=msg_filter,
+                    msg_id=msg_id,
                 )
 
                 if size is None:  # msg filtered out
@@ -464,7 +505,12 @@ class IMAPBackup:
         mbox.flush()
         mbox.unlock()
 
-    def download_folder_messages(self, mbox, foldername, msg_filter=None):
+    def download_folder_messages(
+        self,
+        mbox: mailbox.Mailbox,
+        foldername: str,
+        msg_filter: MsgFilter | None = None,
+    ) -> None:
         """Download all messages from the IMAP folder with `foldername` to the
         Mailbox instance `mbox`."""
         fol_messages = self.mailserver.scan_folder(foldername)
@@ -476,23 +522,30 @@ class IMAPBackup:
 
         self.download_messages(mbox, foldername, new_messages, msg_filter=msg_filter)
 
-    def download_all_messages(self, msg_filter=None):
+    def download_all_messages(self, msg_filter: MsgFilter | None = None) -> None:
         """Download all messages to a new mailbox with format `fmt`."""
         for name_pair in self.names:
             try:
                 foldername, filename = name_pair
+                mbox: mailbox.Mailbox
                 if self.fmt == "mbox":
-                    mbox = mailbox.mbox(filename, factory=email_message_factory)
+                    mbox = mailbox.mbox(
+                        filename,
+                        factory=email_message_factory,  # type: ignore[arg-type]
+                    )
                 elif self.fmt == "maildir":
-                    mbox = mailbox.Maildir(filename, factory=email_message_factory)
+                    mbox = mailbox.Maildir(
+                        filename,
+                        factory=email_message_factory,  # type: ignore[arg-type]
+                    )
                 else:
-                    raise ValueError("Mailbox format {} not understood".format(fmt))
+                    raise ValueError(f"Mailbox format {self.fmt} not understood")
                 self.download_folder_messages(mbox, foldername, msg_filter=msg_filter)
 
             except SkipFolderException as err:
                 logger.error(err)
 
 
-def email_message_factory(f):
+def email_message_factory(f: IO[bytes]) -> email.message.EmailMessage:
     """Factory to create EmailMessage objects instead of Message objects"""
     return email.message_from_binary_file(f, policy=email.policy.default)

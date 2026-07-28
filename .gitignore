@@ -1,7 +1,13 @@
 .vscode
 .directory
+.venv
+venv
+.mypy_cache
+.ruff_cache
+.pytest_cache
 
 *.py[cod]
+imapbackup3/_version.py
 
 # C extensions
 *.so
