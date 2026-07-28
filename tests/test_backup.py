@@ -1,4 +1,4 @@
-"""Tests for the pure parsing/formatting helpers and IMAPBackup logic."""
+"""Tests for pretty_byte_count and IMAPBackup logic."""
 
 from __future__ import annotations
 
@@ -7,14 +7,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from imapbackup3.imapbackup import (
-    IMAPBackup,
-    MailServerHandler,
-    parse_list,
-    parse_paren_list,
-    parse_string_list,
-    pretty_byte_count,
-)
+from imapbackup3.backup import IMAPBackup, pretty_byte_count
+from imapbackup3.transport import MailServerHandler
 
 
 class TestPrettyByteCount:
@@ -35,28 +29,6 @@ class TestPrettyByteCount:
 
     def test_terabytes(self) -> None:
         assert pretty_byte_count(2 * 1099511627776) == "2.000 TB"
-
-
-class TestParsing:
-    def test_parse_paren_list_flat(self) -> None:
-        result, rest = parse_paren_list(r"(\HasNoChildren) ")
-        assert result == [r"\HasNoChildren"]
-        assert rest == " "
-
-    def test_parse_paren_list_multiple(self) -> None:
-        result, rest = parse_paren_list(r"(\Noselect \HasChildren) rest")
-        assert result == [r"\Noselect", r"\HasChildren"]
-        assert rest == " rest"
-
-    def test_parse_string_list_quoted(self) -> None:
-        assert parse_string_list(' "." "INBOX.Sent"') == [".", "INBOX.Sent"]
-
-    def test_parse_string_list_unquoted_root(self) -> None:
-        assert parse_string_list(' "." INBOX') == [".", "INBOX"]
-
-    def test_parse_list(self) -> None:
-        row = rb'(\HasNoChildren) "." "INBOX"'
-        assert parse_list(row) == [[r"\HasNoChildren"], ".", "INBOX"]
 
 
 class TestGetMailboxFilename:

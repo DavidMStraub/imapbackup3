@@ -8,13 +8,12 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from imapbackup3.imapbackup import (
+from imapbackup3.exceptions import (
     IMAPCommandError,
     IMAPConnectionError,
-    MailServerHandler,
     SkipFolderException,
-    _quote_mailbox,
 )
+from imapbackup3.transport import MailServerHandler, _quote_mailbox
 
 
 def _make_handler(**kwargs) -> MailServerHandler:

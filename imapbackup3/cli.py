@@ -9,7 +9,8 @@ import logging
 import os
 import sys
 
-from .imapbackup import IMAPBackup, IMAPCommandError, IMAPConnectionError
+from .backup import IMAPBackup
+from .exceptions import IMAPCommandError, IMAPConnectionError
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("imapbackup3")

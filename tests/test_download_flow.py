@@ -9,11 +9,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from imapbackup3.imapbackup import (
-    IMAPBackup,
-    SkipFolderException,
-    email_message_factory,
-)
+from imapbackup3.backup import IMAPBackup, email_message_factory
+from imapbackup3.exceptions import SkipFolderException
 
 
 def _make_backup() -> IMAPBackup:

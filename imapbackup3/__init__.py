@@ -1,9 +1,5 @@
-from .imapbackup import (
-    IMAPBackup,
-    IMAPCommandError,
-    IMAPConnectionError,
-    SkipFolderException,
-)
+from .backup import IMAPBackup
+from .exceptions import IMAPCommandError, IMAPConnectionError, SkipFolderException
 
 try:
     from ._version import version as __version__
