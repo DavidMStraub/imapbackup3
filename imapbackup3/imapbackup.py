@@ -16,7 +16,6 @@ import mailbox
 import os
 import re
 import socket
-import sys
 from collections.abc import Callable
 from typing import IO, Any
 
@@ -27,6 +26,14 @@ MsgFilter = Callable[[email.message.EmailMessage], "email.message.EmailMessage |
 
 class SkipFolderException(Exception):
     """Indicates aborting processing of current folder, continue with next folder."""
+
+
+class IMAPConnectionError(Exception):
+    """Raised when a connection to the IMAP server cannot be established."""
+
+
+class IMAPCommandError(Exception):
+    """Raised when an IMAP command response is not ``OK``."""
 
 
 def pretty_byte_count(num: int) -> str:
@@ -57,6 +64,13 @@ def _fetch_payload(item: bytes | tuple[bytes, bytes] | None) -> bytes:
     """Extract the message payload from one element of an IMAP FETCH response."""
     assert isinstance(item, tuple)
     return item[1]
+
+
+def _quote_mailbox(name: str) -> str:
+    """Quote a mailbox name as an IMAP quoted-string (RFC 3501 section 4.3),
+    escaping any backslash or double-quote it contains."""
+    escaped = name.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
 
 
 def require_login(f: Callable[..., Any]) -> Callable[..., Any]:
@@ -106,9 +120,10 @@ class MailServerHandler:
 
         Returns a string."""
         assert self.server is not None
-        self.server.select(f'"{folder}"', readonly=True)
+        self.server.select(_quote_mailbox(folder), readonly=True)
         typ, data = self.server.fetch(str(num), "RFC822")
-        assert typ == "OK"
+        if typ != "OK":
+            raise IMAPCommandError(f"FETCH {num} in folder {folder!r} failed: {data}")
         raw = _fetch_payload(data[0])
         text: str | None = None
         for encoding in ["utf-8", "latin1"]:
@@ -124,10 +139,10 @@ class MailServerHandler:
     def login(self) -> imaplib.IMAP4:
         """Connects to the server and logs in.
 
-        Returns IMAP4 object."""
+        Returns IMAP4 object.
+
+        Raises `IMAPConnectionError` if the connection cannot be established."""
         try:
-            if self.timeout:
-                socket.setdefaulttimeout(self.timeout)
             if self.usessl and self.keyfilename:
                 logger.info(
                     "Connecting to '%s' TCP port %d, SSL, key from %s, cert from %s",
@@ -137,14 +152,18 @@ class MailServerHandler:
                     self.certfilename,
                 )
                 server: imaplib.IMAP4 = imaplib.IMAP4_SSL(
-                    self.host, self.port, self.keyfilename, self.certfilename
+                    self.host,
+                    self.port,
+                    self.keyfilename,
+                    self.certfilename,
+                    timeout=self.timeout,
                 )
             elif self.usessl:
                 logger.info("Connecting to '%s' TCP port %d, SSL", self.host, self.port)
-                server = imaplib.IMAP4_SSL(self.host, self.port)
+                server = imaplib.IMAP4_SSL(self.host, self.port, timeout=self.timeout)
             else:
                 logger.info("Connecting to '%s' TCP port %d", self.host, self.port)
-                server = imaplib.IMAP4(self.host, self.port)
+                server = imaplib.IMAP4(self.host, self.port, timeout=self.timeout)
 
             # speed up interactions on TCP connections using small packets
             server.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
@@ -153,27 +172,17 @@ class MailServerHandler:
             server.login(self.user, self.password)
         except socket.gaierror as err:
             (err_no, desc) = err.args
-            logger.info(
-                "ERROR: problem looking up server '%s' (%s %s)",
-                self.host,
-                err_no,
-                desc,
-            )
-            sys.exit(3)
+            raise IMAPConnectionError(
+                f"Problem looking up server '{self.host}' ({err_no} {desc})"
+            ) from err
         except OSError as err:
             if str(err) == "SSL_CTX_use_PrivateKey_file error":
-                logger.info(
-                    f"ERROR: error reading private key file '{self.keyfilename}'"
-                )
+                message = f"Error reading private key file '{self.keyfilename}'"
             elif str(err) == "SSL_CTX_use_certificate_chain_file error":
-                logger.info(
-                    "ERROR: error reading certificate chain file '%s'",
-                    (self.keyfilename),
-                )
+                message = f"Error reading certificate chain file '{self.keyfilename}'"
             else:
-                logger.info("ERROR: could not connect to '%s' (%s)", self.host, err)
-
-            sys.exit(4)
+                message = f"Could not connect to '{self.host}' ({err})"
+            raise IMAPConnectionError(message) from err
 
         self.server = server
         return server
@@ -184,52 +193,50 @@ class MailServerHandler:
         assert self.server is not None
         messages: dict[str, int] = {}
         logger.info("Folder %s ...", foldername)
-        try:
-            typ, list_data = self.server.select(f'"{foldername}"', readonly=True)
-            if typ != "OK":
-                raise SkipFolderException(f"SELECT failed: {list_data}")
-            num_msgs_raw = list_data[0]
-            assert num_msgs_raw is not None
-            num_msgs = int(num_msgs_raw)
 
-            # each message
-            for num in range(1, num_msgs + 1):
-                # Retrieve Message-Id, making sure we don't mark all messages as read
+        typ, list_data = self.server.select(_quote_mailbox(foldername), readonly=True)
+        if typ != "OK":
+            raise SkipFolderException(f"SELECT failed: {list_data}")
+        num_msgs_raw = list_data[0]
+        assert num_msgs_raw is not None
+        num_msgs = int(num_msgs_raw)
+
+        # each message
+        for num in range(1, num_msgs + 1):
+            # Retrieve Message-Id, making sure we don't mark all messages as read
+            typ, fetch_data = self.server.fetch(
+                str(num), "(BODY.PEEK[HEADER.FIELDS (MESSAGE-ID)])"
+            )
+            if typ != "OK" or not fetch_data[0]:
+                raise SkipFolderException(f"FETCH {num} failed: {fetch_data}")
+            header = _fetch_payload(fetch_data[0]).strip()
+            # remove newlines inside Message-Id (a dumb Exchange trait)
+            header_str = BLANKS_RE.sub(" ", header.decode())
+            match = MSGID_RE.match(header_str)
+            try:
+                msg_id = match.group(1)  # type: ignore[union-attr]
+                if msg_id not in messages:
+                    # avoid adding dupes
+                    messages[msg_id] = num
+            except (IndexError, AttributeError):
+                # Some messages may have no Message-Id, so we'll synthesise one
+                # (this usually happens with Sent, Drafts and .Mac news)
                 typ, fetch_data = self.server.fetch(
-                    str(num), "(BODY.PEEK[HEADER.FIELDS (MESSAGE-ID)])"
+                    str(num), "(BODY[HEADER.FIELDS (FROM TO CC DATE SUBJECT)])"
                 )
-                if typ != "OK" or not fetch_data[0]:
-                    raise SkipFolderException(f"FETCH {num} failed: {fetch_data}")
-                header = _fetch_payload(fetch_data[0]).strip()
-                # remove newlines inside Message-Id (a dumb Exchange trait)
-                header_str = BLANKS_RE.sub(" ", header.decode())
-                match = MSGID_RE.match(header_str)
-                try:
-                    msg_id = match.group(1)  # type: ignore[union-attr]
-                    if msg_id not in list(messages.keys()):
-                        # avoid adding dupes
-                        messages[msg_id] = num
-                except (IndexError, AttributeError):
-                    # Some messages may have no Message-Id, so we'll synthesise one
-                    # (this usually happens with Sent, Drafts and .Mac news)
-                    typ, fetch_data = self.server.fetch(
-                        str(num), "(BODY[HEADER.FIELDS (FROM TO CC DATE SUBJECT)])"
-                    )
-                    if typ != "OK":
-                        raise SkipFolderException(
-                            f"FETCH {num} failed: {fetch_data}"
-                        ) from None
-                    header_str = _fetch_payload(fetch_data[0]).decode().strip()
-                    header_str = header_str.replace("\r\n", "\t")
-                    messages[
-                        "<"
-                        + UUID
-                        + "."
-                        + hashlib.sha1(header_str.encode()).hexdigest()
-                        + ">"
-                    ] = num
-        finally:
-            pass
+                if typ != "OK":
+                    raise SkipFolderException(
+                        f"FETCH {num} failed: {fetch_data}"
+                    ) from None
+                header_str = _fetch_payload(fetch_data[0]).decode().strip()
+                header_str = header_str.replace("\r\n", "\t")
+                messages[
+                    "<"
+                    + UUID
+                    + "."
+                    + hashlib.sha1(header_str.encode()).hexdigest()
+                    + ">"
+                ] = num
 
         # done
         logger.info("Found %d messages", len(messages))
@@ -241,8 +248,8 @@ class MailServerHandler:
         # see RFC 3501 page 39 paragraph 4
         assert self.server is not None
         typ, data = self.server.list()
-        assert typ == "OK"
-        # assert len(data) == 1
+        if typ != "OK":
+            raise IMAPCommandError(f"LIST failed: {data}")
         lst = parse_list(data[0])  # [attribs, hierarchy delimiter, root name]
         hierarchy_delim = lst[1]
         # NIL if there is no hierarchy
@@ -259,7 +266,8 @@ class MailServerHandler:
 
         # Get LIST of all folders
         typ, data = self.server.list()
-        assert typ == "OK"
+        if typ != "OK":
+            raise IMAPCommandError(f"LIST failed: {data}")
 
         names = []
 
@@ -392,17 +400,12 @@ class IMAPBackup:
         for _imap_foldername, filename in sorted(self.names):
             disk_foldername = os.path.split(filename)[0]
             if disk_foldername:
-                try:
-                    # print "*** mkdir:", disk_foldername  # *DEBUG
-                    os.mkdir(disk_foldername)
-                except OSError as err:
-                    if err.errno != 17:
-                        raise
+                os.makedirs(disk_foldername, exist_ok=True)
 
     @property
     def names(self) -> list[tuple[str, str]]:
         """Return a (cached) list of IMAP folder name and file/directory name tuples."""
-        if not self._names:
+        if self._names is None:
             self._names = self._get_names()
         return self._names
 
@@ -446,13 +449,10 @@ class IMAPBackup:
             # the filter modified the message
             text = filtered_msg.as_string()
 
-        mbox.add(text.encode())
+        encoded = text.encode()
+        mbox.add(encoded)
 
-        size = sys.getsizeof(text)
-
-        gc.collect()
-
-        return size
+        return len(encoded)
 
     def download_messages(
         self,
@@ -476,9 +476,9 @@ class IMAPBackup:
 
         total = biggest = 0
 
-        # each new message
-        for msg_id in messages:
-            try:
+        try:
+            # each new message
+            for i, msg_id in enumerate(messages, start=1):
                 size = self.download_message(
                     mbox,
                     folder,
@@ -499,11 +499,14 @@ class IMAPBackup:
                     pretty_byte_count(biggest),
                 )
 
-            except KeyboardInterrupt:
-                mbox.flush()
-                mbox.unlock()
-        mbox.flush()
-        mbox.unlock()
+                # periodic, not per-message, to avoid needless GC overhead
+                if i % 500 == 0:
+                    gc.collect()
+        finally:
+            # runs exactly once, whether the loop finished, raised, or was
+            # interrupted (e.g. Ctrl-C, which then propagates to the caller)
+            mbox.flush()
+            mbox.unlock()
 
     def download_folder_messages(
         self,
@@ -514,7 +517,11 @@ class IMAPBackup:
         """Download all messages from the IMAP folder with `foldername` to the
         Mailbox instance `mbox`."""
         fol_messages = self.mailserver.scan_folder(foldername)
-        fil_messages = {msg["message-id"].strip(): num for num, msg in mbox.items()}
+        fil_messages = {
+            msg["message-id"].strip(): num
+            for num, msg in mbox.items()
+            if msg["message-id"] is not None
+        }
         new_messages = {}
         for msg_id in fol_messages:
             if msg_id not in fil_messages:
@@ -524,6 +531,7 @@ class IMAPBackup:
 
     def download_all_messages(self, msg_filter: MsgFilter | None = None) -> None:
         """Download all messages to a new mailbox with format `fmt`."""
+        self.create_folder_structure()
         for name_pair in self.names:
             try:
                 foldername, filename = name_pair

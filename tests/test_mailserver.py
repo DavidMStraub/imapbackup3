@@ -8,7 +8,13 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from imapbackup3.imapbackup import MailServerHandler, SkipFolderException
+from imapbackup3.imapbackup import (
+    IMAPCommandError,
+    IMAPConnectionError,
+    MailServerHandler,
+    SkipFolderException,
+    _quote_mailbox,
+)
 
 
 def _make_handler(**kwargs) -> MailServerHandler:
@@ -27,7 +33,7 @@ class TestLogin:
         handler = _make_handler(usessl=True)
         server = handler.login()
 
-        ssl_ctor.assert_called_once_with("localhost", 993)
+        ssl_ctor.assert_called_once_with("localhost", 993, timeout=None)
         fake_server.login.assert_called_once_with("user", "pw")
         assert server is fake_server
 
@@ -40,7 +46,7 @@ class TestLogin:
         handler = _make_handler(usessl=False, port=143)
         handler.login()
 
-        ctor.assert_called_once_with("localhost", 143)
+        ctor.assert_called_once_with("localhost", 143, timeout=None)
         fake_server.login.assert_called_once_with("user", "pw")
 
     def test_login_with_key_and_cert(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -54,29 +60,54 @@ class TestLogin:
         )
         handler.login()
 
-        ssl_ctor.assert_called_once_with("localhost", 993, "key.pem", "cert.pem")
+        ssl_ctor.assert_called_once_with(
+            "localhost", 993, "key.pem", "cert.pem", timeout=None
+        )
 
-    def test_gaierror_exits(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_timeout_passed_to_constructor_not_global_socket(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Regression test: login() must not call socket.setdefaulttimeout(),
+        which would leak into unrelated sockets in the same process."""
+        fake_server = MagicMock()
+        fake_server.sock = MagicMock()
+        ssl_ctor = MagicMock(return_value=fake_server)
+        monkeypatch.setattr(imaplib, "IMAP4_SSL", ssl_ctor)
+        set_default_timeout = MagicMock()
+        monkeypatch.setattr(socket, "setdefaulttimeout", set_default_timeout)
+
+        handler = _make_handler(usessl=True, timeout=30)
+        handler.login()
+
+        ssl_ctor.assert_called_once_with("localhost", 993, timeout=30)
+        set_default_timeout.assert_not_called()
+
+    def test_gaierror_raises_connection_error_not_sys_exit(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Regression test: login() must raise a catchable exception so the
+        package remains usable as a library, not call sys.exit()."""
+
         def raise_gaierror(*args, **kwargs):
             raise socket.gaierror(-2, "Name or service not known")
 
         monkeypatch.setattr(imaplib, "IMAP4_SSL", raise_gaierror)
 
         handler = _make_handler(usessl=True)
-        with pytest.raises(SystemExit) as exc_info:
+        with pytest.raises(IMAPConnectionError):
             handler.login()
-        assert exc_info.value.code == 3
 
-    def test_socket_error_exits(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_socket_error_raises_connection_error_not_sys_exit(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         def raise_oserror(*args, **kwargs):
             raise OSError("could not connect")
 
         monkeypatch.setattr(imaplib, "IMAP4_SSL", raise_oserror)
 
         handler = _make_handler(usessl=True)
-        with pytest.raises(SystemExit) as exc_info:
+        with pytest.raises(IMAPConnectionError):
             handler.login()
-        assert exc_info.value.code == 4
 
 
 class TestRequireLogin:
@@ -156,6 +187,53 @@ class TestScanFolder:
         with pytest.raises(SkipFolderException):
             handler.scan_folder("Missing")
 
+    def test_folder_name_with_quote_is_escaped_in_select(self) -> None:
+        """Regression test: a folder name containing a `"` used to be spliced
+        unescaped into the IMAP command string, breaking its syntax."""
+        handler, server = self._handler_with_server()
+        server.select.return_value = ("OK", [b"0"])
+
+        handler.scan_folder('Weird"Folder')
+
+        server.select.assert_called_once_with('"Weird\\"Folder"', readonly=True)
+
+
+class TestQuoteMailbox:
+    def test_plain_name_is_just_quoted(self) -> None:
+        assert _quote_mailbox("INBOX.Sent") == '"INBOX.Sent"'
+
+    def test_double_quote_is_escaped(self) -> None:
+        assert _quote_mailbox('Weird"Folder') == '"Weird\\"Folder"'
+
+    def test_backslash_is_escaped(self) -> None:
+        assert _quote_mailbox("Weird\\Folder") == '"Weird\\\\Folder"'
+
+
+class TestFetchMessage:
+    def test_returns_decoded_text(self) -> None:
+        handler = _make_handler()
+        handler.server = MagicMock()
+        handler.logged_in = True
+        handler.server.fetch.return_value = (
+            "OK",
+            [(b"1 (RFC822 {20})", b"Subject: hi\r\n\r\nbody")],
+        )
+
+        text = handler.fetch_message("INBOX", 1)
+
+        assert text == "Subject: hi\n\nbody"
+
+    def test_non_ok_raises_command_error_not_assertion_error(self) -> None:
+        """Regression test: a non-OK FETCH must raise a real exception, not
+        rely on a bare `assert` that is stripped when running under -O."""
+        handler = _make_handler()
+        handler.server = MagicMock()
+        handler.logged_in = True
+        handler.server.fetch.return_value = ("NO", [b"server busy"])
+
+        with pytest.raises(IMAPCommandError):
+            handler.fetch_message("INBOX", 1)
+
 
 class TestGetFolderNames:
     def test_parses_folder_names(self) -> None:
@@ -174,6 +252,15 @@ class TestGetFolderNames:
 
         assert names == ["INBOX", "INBOX.Sent"]
 
+    def test_non_ok_raises_command_error(self) -> None:
+        handler = _make_handler()
+        handler.server = MagicMock()
+        handler.logged_in = True
+        handler.server.list.return_value = ("NO", [b"unavailable"])
+
+        with pytest.raises(IMAPCommandError):
+            handler.get_folder_names()
+
 
 class TestGetHierarchyDelimiter:
     def test_extracts_delimiter(self) -> None:
@@ -191,3 +278,12 @@ class TestGetHierarchyDelimiter:
         handler.server.list.return_value = ("OK", [rb'(\Noselect) NIL "INBOX"'])
 
         assert handler.get_hierarchy_delimiter() == "."
+
+    def test_non_ok_raises_command_error(self) -> None:
+        handler = _make_handler()
+        handler.server = MagicMock()
+        handler.logged_in = True
+        handler.server.list.return_value = ("NO", [b"unavailable"])
+
+        with pytest.raises(IMAPCommandError):
+            handler.get_hierarchy_delimiter()

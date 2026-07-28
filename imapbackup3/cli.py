@@ -9,7 +9,7 @@ import logging
 import os
 import sys
 
-from .imapbackup import IMAPBackup
+from .imapbackup import IMAPBackup, IMAPCommandError, IMAPConnectionError
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("imapbackup3")
@@ -147,6 +147,6 @@ def main() -> None:
             imb.download_all_messages()
     except KeyboardInterrupt:
         sys.exit(0)
-    except (OSError, imaplib.IMAP4.error) as err:
+    except (OSError, imaplib.IMAP4.error, IMAPConnectionError, IMAPCommandError) as err:
         logger.error("ERROR: %s", err)
         sys.exit(5)

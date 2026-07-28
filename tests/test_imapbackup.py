@@ -132,3 +132,30 @@ class TestDownloadMessages:
         )
 
         mbox.add.assert_not_called()
+
+
+class TestNamesCaching:
+    def test_empty_folder_list_is_still_cached(self) -> None:
+        """Regression test: `if not self._names` treated an empty (but
+        successfully fetched) folder list as "not yet cached", so it kept
+        re-querying the IMAP server on every access."""
+        imb = IMAPBackup(host="localhost", user="user", password="pw")
+        imb.mailserver = MagicMock(spec=MailServerHandler)
+        imb.mailserver.get_folder_names.return_value = []
+        imb.mailserver.get_hierarchy_delimiter.return_value = "."
+
+        assert imb.names == []
+        assert imb.names == []
+
+        imb.mailserver.get_folder_names.assert_called_once()
+
+    def test_nonempty_folder_list_is_cached(self) -> None:
+        imb = IMAPBackup(host="localhost", user="user", password="pw")
+        imb.mailserver = MagicMock(spec=MailServerHandler)
+        imb.mailserver.get_folder_names.return_value = ["INBOX"]
+        imb.mailserver.get_hierarchy_delimiter.return_value = "."
+
+        assert imb.names == [("INBOX", "INBOX.mbox")]
+        assert imb.names == [("INBOX", "INBOX.mbox")]
+
+        imb.mailserver.get_folder_names.assert_called_once()
