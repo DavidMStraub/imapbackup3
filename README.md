@@ -1,10 +1,6 @@
 imapbackup3
 ===========
 
-[![CI](https://github.com/DavidMStraub/imapbackup3/actions/workflows/ci.yml/badge.svg)](https://github.com/DavidMStraub/imapbackup3/actions/workflows/ci.yml)
-[![PyPI](https://img.shields.io/pypi/v/imapbackup3.svg)](https://pypi.org/project/imapbackup3/)
-[![Python versions](https://img.shields.io/pypi/pyversions/imapbackup3.svg)](https://pypi.org/project/imapbackup3/)
-
 A Python package for creating full backups of IMAP mailboxes
 
 ## Installation
